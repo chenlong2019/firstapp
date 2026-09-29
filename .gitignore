@@ -1,0 +1,57 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+.DS_Store
+dist
+dist-ssr
+coverage
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+*.tsbuildinfo
+
+.eslintcache
+
+# Cypress
+/cypress/videos/
+/cypress/screenshots/
+
+# Vitest
+__screenshots__/
+
+# Vite
+*.timestamp-*-*.mjs
+
+test-results/
+playwright-report/
+
+# Electron 打包产物
+release/
+release-*/
+.electron-dist/
+
+# DJI 沙盒验证脚本的截图产物(SHOTS=1 时生成)
+.verify-shots/
+.verify-dji.log
+
+# 大体积本地演示数据,代码未引用
+roads_demo_beijing.gpkg
+
+# WorkBuddy 会话/记忆数据(本地工具数据,不入库)
+.workbuddy/
