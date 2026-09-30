@@ -23,6 +23,12 @@ const router = createRouter({
       component: () => import('../views/glb/glb-viewer.vue'),
       meta: { title: 'GLB 模型查看', menu: false },
     },
+    {
+      path: '/lib-demo',
+      name: 'LibDemo',
+      component: () => import('../views/lib-demo/lib-demo.vue'),
+      meta: { title: '库调用示例', menu: false },
+    },
     { path: '/:pathMatch(.*)*', redirect: '/glb' },
   ],
 })

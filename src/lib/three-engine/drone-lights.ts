@@ -197,6 +197,20 @@ interface Led {
   light: THREE.PointLight | null
   /** 点亮时点光源强度;不填用 LED_LIGHT_INTENSITY(近距离成排的灯珠应调低,溢光会互相叠加) */
   lightIntensity?: number
+  /**
+   * 挂进机臂折叠节点时的"骨骼绑定位姿"(机臂局部系)。
+   * 每帧按它强制同步,灯珠像焊在骨骼上一样跟随机臂折叠/展开 ——
+   * 即使中途被热更新重建等外力挪动过,下一帧也会自动归位。
+   */
+  bindLocal?: { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 }
+  /**
+   * 灯珠网格出厂时的父节点。attachStatusToArms 会把灯珠网格移挂进机臂折叠节点，
+   * 销毁时必须放回原父节点，否则模型树里永久缺了这盏灯（热更新重建灯组时再也找不到网格）。
+   * 为 null 表示灯珠是模型缺网格时我们手工补的兜底球体，销毁直接摘掉即可。
+   */
+  originalParent: THREE.Object3D | null
+  /** 出厂点光源的父节点（点光源同样会被移挂进机臂折叠节点，销毁时一并放回） */
+  originalLightParent: THREE.Object3D | null
 }
 
 const AUTO_LIGHT_MAX_AGL_METERS = 8 // 自动模式:模拟"夜间低空降落辅助",高于此高度自动熄灭
@@ -237,6 +251,8 @@ export class DroneLights {
   private timeMs = 0
   /** 状态灯珠是否已挂到后机臂折叠节点下(一次性,须在展开态完成) */
   private statusArmsAttached = false
+  /** 机臂折叠节点引用(按 statusLeds 索引对齐:[0]=右臂,[1]=左臂),供每帧骨骼同步 */
+  private statusArmFolds: Array<THREE.Object3D | null> = [null, null]
   private batteryLedsUi: BatteryLedSnapshot[] = []
   private readonly tmpVector = new THREE.Vector3()
   private readonly disposables: Array<THREE.BufferGeometry | THREE.Material> = []
@@ -307,12 +323,15 @@ export class DroneLights {
     ]) {
       const sourceMesh = model.getObjectByName(spec.meshName) ?? null
       const anchor = nodeCenterLocal(spec.meshName) ?? spec.fallback
-      const material = this.createLedMaterial()
+      const material = this.createLedMaterial(2.4, ledShellMap(sourceMesh))
       let mesh: THREE.Object3D
       let originalMaterial: THREE.Material | null = null
+      // 此刻 attachStatusToArms 尚未调用,sourceMesh.parent 就是出厂父节点
+      let originalParent: THREE.Object3D | null = null
       if (sourceMesh instanceof THREE.Mesh) {
         // 网格本体即发光体:原地换材质,可见性不变,位置先不动(展开后由 attachStatusToArms 挂进机臂)
         originalMaterial = sourceMesh.material
+        originalParent = sourceMesh.parent
         sourceMesh.material = material
         mesh = sourceMesh
       } else {
@@ -322,12 +341,15 @@ export class DroneLights {
         mesh.position.copy(anchor)
         this.rig.add(mesh)
       }
+      const light = takeModelLight(spec.lightName, anchor)
       this.statusLeds.push({
         mesh,
         material,
         sourceMesh,
         originalMaterial,
-        light: takeModelLight(spec.lightName, anchor),
+        originalParent,
+        originalLightParent: light?.parent ?? null,
+        light,
       })
     }
 
@@ -338,12 +360,14 @@ export class DroneLights {
       const meshName = `LED_BatteryCharge_0${index + 1}`
       const sourceMesh = model.getObjectByName(meshName) ?? null
       // 4 颗灯珠连排且离相机近,自发光调低避免 Bloom 过曝糊成一片
-      const material = this.createLedMaterial(0.9)
+      const material = this.createLedMaterial(0.9, ledShellMap(sourceMesh))
       let mesh: THREE.Object3D
       let originalMaterial: THREE.Material | null = null
       let anchor: THREE.Vector3
+      let originalParent: THREE.Object3D | null = null
       if (sourceMesh instanceof THREE.Mesh) {
         originalMaterial = sourceMesh.material
+        originalParent = sourceMesh.parent
         sourceMesh.material = material
         mesh = sourceMesh
         anchor = nodeCenterLocal(meshName) ?? new THREE.Vector3()
@@ -356,12 +380,15 @@ export class DroneLights {
         mesh.position.copy(anchor)
         this.rig.add(mesh)
       }
+      const batteryLight = takeModelLight(`LIGHT_BatteryLED_0${index + 1}`, anchor)
       const led: Led = {
         mesh,
         material,
         sourceMesh,
         originalMaterial,
-        light: takeModelLight(`LIGHT_BatteryLED_0${index + 1}`, anchor),
+        originalParent,
+        originalLightParent: batteryLight?.parent ?? null,
+        light: batteryLight,
         // 真机灯珠嵌在壳体开孔内,光不会打亮外壳;点光源溢光归零,只留灯珠自发光
         lightIntensity: 0,
       }
@@ -479,7 +506,19 @@ export class DroneLights {
    * 不吃配平俯仰)导致灯珠恒定浮高 sin13.6°×0.73≈0.175m。
    */
   attachStatusToArms(leftFold: THREE.Object3D | null, rightFold: THREE.Object3D | null): void {
-    if (this.statusArmsAttached || !this.model) return
+    if (!this.model) return
+    if (this.statusArmsAttached) {
+      // 已绑定过:只检查父子关系是否仍然成立(热更新重建等外力可能破坏它)
+      this.statusArmFolds = [rightFold, leftFold] // 与 statusLeds 对齐:[0]=右,[1]=左
+      for (const [index, led] of this.statusLeds.entries()) {
+        const fold = this.statusArmFolds[index]
+        if (led && fold && led.mesh.parent !== fold) {
+          fold.attach(led.mesh) // 父子关系被破坏 → 按当前世界位姿重新收养
+          if (led.light) fold.attach(led.light)
+        }
+      }
+      return
+    }
     this.model.updateMatrixWorld(true)
     const pairs: Array<{ led: Led | undefined; fold: THREE.Object3D | null }> = [
       { led: this.statusLeds[1], fold: leftFold }, // statusLeds[1] 在 -X(左)
@@ -489,8 +528,32 @@ export class DroneLights {
       if (!led || !fold) continue
       fold.attach(led.mesh) // 保持世界变换移挂(实测精确;灯珠本体在正确变换链上)
       if (led.light) fold.attach(led.light)
+      // 记录骨骼绑定位姿:此后每帧按它强制同步(见 syncStatusToArms)
+      led.bindLocal = {
+        position: led.mesh.position.clone(),
+        quaternion: led.mesh.quaternion.clone(),
+        scale: led.mesh.scale.clone(),
+      }
     }
+    this.statusArmFolds = [rightFold, leftFold]
     this.statusArmsAttached = true
+  }
+
+  /**
+   * 每帧把状态灯珠按"骨骼绑定位姿"强制同步(骨骼动画式跟随)。
+   * 灯珠像焊死在机臂末端一样随折叠/展开运动;任何外力(热更新、调试脚本
+   * 挪动、意外重挂)造成的偏移都会在下一帧自动归位。
+   */
+  syncStatusToArms(): void {
+    if (!this.statusArmsAttached) return
+    for (const [index, led] of this.statusLeds.entries()) {
+      const bind = led?.bindLocal
+      const fold = this.statusArmFolds[index]
+      if (!bind || !fold || led.mesh.parent !== fold) continue
+      led.mesh.position.copy(bind.position)
+      led.mesh.quaternion.copy(bind.quaternion)
+      led.mesh.scale.copy(bind.scale)
+    }
   }
 
   getSnapshot(): DroneLightsSnapshot {
@@ -512,8 +575,19 @@ export class DroneLights {
     this.rig.parent?.remove(this.rig)
     if (this.auxBeam) this.scene?.remove(this.auxBeam)
     for (const led of [...this.statusLeds, ...this.batteryLeds]) {
-      // 原生灯珠网格可能已被移挂进机臂节点;原材质是全机共享的,必须还原引用
-      led.mesh.parent?.remove(led.mesh)
+      // 原生灯珠网格可能已被移挂进机臂折叠节点:先放回出厂父节点。
+      // 不能直接 remove —— 那会让模型树里永久缺了这盏灯,热更新重建灯组时再也找不到网格。
+      if (led.originalParent) {
+        if (led.mesh.parent !== led.originalParent) led.originalParent.attach(led.mesh)
+      } else {
+        // 兜底自建灯珠(模型缺网格时手工补的球体)不属于模型,直接摘掉
+        led.mesh.parent?.remove(led.mesh)
+      }
+      // 点光源同理:可能被移挂进了机臂折叠节点
+      if (led.light && led.originalLightParent && led.light.parent !== led.originalLightParent) {
+        led.originalLightParent.attach(led.light)
+      }
+      // 原材质是全机共享的,必须还原引用
       if (led.originalMaterial && led.sourceMesh instanceof THREE.Mesh) {
         led.sourceMesh.material = led.originalMaterial
       }
@@ -533,14 +607,29 @@ export class DroneLights {
     this.scene = null
   }
 
-  /** emissiveIntensity 默认按"远距离可辨"的臂尖状态灯取值;近距离成排的灯珠(电池条)应调低,否则过曝糊成一片 */
-  private createLedMaterial(emissiveIntensity = 2.4): THREE.MeshStandardMaterial {
+  /**
+   * 灯珠自发光材质。
+   *
+   * ⚠️ 底色必须跟着模型自带贴图走:灯珠网格用的是全机共享的贴图材质,灯位在贴图上就是
+   * "灯罩本色"(机臂末端为绿色)。早期版本把 color 写成深色(0x181d21)且不带 map,
+   * 结果灯没亮(emissive=0)时整颗灯珠只剩近黑底色,把原模型的绿色灯罩盖成了黑疙瘩。
+   *
+   * emissiveIntensity 默认按"远距离可辨"的臂尖状态灯取值;近距离成排的灯珠(电池条)应调低,否则过曝糊成一片。
+   */
+  private createLedMaterial(
+    emissiveIntensity = 2.4,
+    shellMap: THREE.Texture | null = null,
+  ): THREE.MeshStandardMaterial {
     const material = new THREE.MeshStandardMaterial({
-      color: 0x181d21,
+      // 有原贴图 → 白底乘贴图(还原灯罩本色);模型缺网格走手放球兜底时才用暗底
+      color: shellMap ? 0xffffff : 0x181d21,
+      map: shellMap,
       emissive: 0x000000,
       emissiveIntensity,
       roughness: 0.4,
       metalness: 0.1,
+      // 原共享材质是 doubleSided,灯珠嵌在壳体开孔里,保持双面避免背面缺失
+      side: THREE.DoubleSide,
       toneMapped: false,
     })
     this.disposables.push(material)
@@ -665,4 +754,15 @@ export class DroneLights {
 
 function blinkPhase(timeMs: number, onMs: number, offMs: number): boolean {
   return timeMs % (onMs + offMs) < onMs
+}
+
+/**
+ * 取灯珠网格原材质上的贴图(灯罩本色)。
+ * 全机共享同一个贴图材质,这里只是只读引用,不会改动共享材质与贴图本身。
+ */
+function ledShellMap(mesh: THREE.Object3D | null): THREE.Texture | null {
+  if (!(mesh instanceof THREE.Mesh)) return null
+  const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+  const map = material ? (material as THREE.MeshStandardMaterial).map : null
+  return map instanceof THREE.Texture ? map : null
 }

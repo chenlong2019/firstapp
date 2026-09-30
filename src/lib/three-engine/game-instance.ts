@@ -63,9 +63,18 @@ export class GameInstance {
     const render = (timestamp: number): void => {
       this.animationFrame = window.requestAnimationFrame(render)
       this.updateFps(timestamp)
-      this.controls?.update()
+      // 仅观察者模式驱动轨道控制器:机载/跟随视角下相机的位置与朝向由
+      // droneFly.updateCamera 每帧全权写入,controls.update() 的强制
+      // lookAt(target) 会把机载画面变成"停在云台位置回头看飞机"。
+      if (this.droneFly?.isOrbitView ?? true) this.controls?.update()
       this.syncShadowFocus()
+      // 录像:先交一帧云台取景给录制器(屏幕照旧显示用户所在视角),未录制时零开销
+      this.droneFly?.captureRecordingFrame()
+      // 拍照取景:必须在 render 之前把相机摆到云台视角
+      this.droneFly?.onBeforeRender()
       if (this.scene && this.camera) this.renderer?.render(this.scene, this.camera)
+      // 拍照拷屏:必须与 render 处于同一任务,否则拿到的是上一帧
+      this.droneFly?.onAfterRender()
       const deltaSeconds = this.previousFrameTime
         ? Math.min((timestamp - this.previousFrameTime) / 1000, 2)
         : 1 / 60

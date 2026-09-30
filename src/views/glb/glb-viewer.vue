@@ -368,6 +368,14 @@
             <dt>贴图</dt>
             <dd>{{ stats.textures }}</dd>
           </div>
+          <div>
+            <dt>骨节</dt>
+            <dd>{{ stats.bones }}</dd>
+          </div>
+          <div>
+            <dt>动画</dt>
+            <dd>{{ stats.animations }}</dd>
+          </div>
         </dl>
       </section>
 
@@ -426,18 +434,45 @@
       </section>
 
       <section v-if="animation.names.length" class="section">
-        <h3>动画</h3>
+        <h3>骨骼动画</h3>
         <select class="clip-select" :value="animation.index" @change="onClipChange">
           <option v-for="(name, index) in animation.names" :key="index" :value="index">
             {{ name }}
           </option>
         </select>
+
+        <div class="timeline">
+          <input
+            class="timeline-range"
+            type="range"
+            min="0"
+            :max="animation.duration || 1"
+            :step="timelineStep"
+            :value="animation.time"
+            @pointerdown="beginScrub"
+            @input="onSeekInput"
+            @change="endScrub"
+          />
+          <div class="timeline-meta">
+            <span data-testid="anim-time">{{ formatTime(animation.time) }}</span>
+            <span>{{ formatTime(animation.duration) }}</span>
+          </div>
+        </div>
+
         <div class="button-row">
-          <button type="button" @click="toggleAnimation">
+          <button type="button" data-testid="anim-prev-frame" @click="stepFrame(-1)">◀ 上一帧</button>
+          <button type="button" data-testid="anim-toggle" @click="toggleAnimation">
             {{ animation.playing ? '暂停' : '播放' }}
           </button>
-          <span class="mono-note">{{ animation.duration.toFixed(2) }} S</span>
+          <button type="button" data-testid="anim-next-frame" @click="stepFrame(1)">下一帧 ▶</button>
         </div>
+        <div class="button-row two">
+          <button type="button" data-testid="anim-restart" @click="restartAnimation">重新播放</button>
+          <button type="button" data-testid="anim-loop" @click="cycleLoopMode">
+            {{ LOOP_LABELS[animation.loop] }}
+          </button>
+        </div>
+
         <label class="slider-row">
           <span class="slider-label">播放速度</span>
           <strong>{{ animation.speed.toFixed(2) }}×</strong>
@@ -450,6 +485,67 @@
             @input="onSpeedInput"
           />
         </label>
+        <div class="button-row three">
+          <button
+            v-for="preset in SPEED_PRESETS"
+            :key="preset"
+            type="button"
+            :class="{ active: Math.abs(animation.speed - preset) < 0.01 }"
+            @click="setAnimationSpeed(preset)"
+          >
+            {{ preset }}×
+          </button>
+        </div>
+      </section>
+
+      <section v-if="skeleton.bones > 0" class="section">
+        <h3>骨骼</h3>
+        <div class="toggle-row">
+          <span>显示骨架辅助线</span>
+          <div class="segmented two">
+            <button
+              type="button"
+              data-testid="skeleton-on"
+              :class="{ active: skeleton.visible }"
+              @click="setSkeleton(true)"
+            >
+              开
+            </button>
+            <button
+              type="button"
+              data-testid="skeleton-off"
+              :class="{ active: !skeleton.visible }"
+              @click="setSkeleton(false)"
+            >
+              关
+            </button>
+          </div>
+        </div>
+        <dl class="info-grid">
+          <div>
+            <dt>骨节</dt>
+            <dd>{{ skeleton.bones }}</dd>
+          </div>
+          <div>
+            <dt>骨链</dt>
+            <dd>{{ skeleton.roots.length }}</dd>
+          </div>
+          <div>
+            <dt>单帧</dt>
+            <dd>{{ (animation.frameStep * 1000).toFixed(0) }} ms</dd>
+          </div>
+          <div>
+            <dt>帧率</dt>
+            <dd>{{ (1 / Math.max(animation.frameStep, 1e-6)).toFixed(0) }} fps</dd>
+          </div>
+          <div class="wide">
+            <dt>骨架</dt>
+            <dd :title="skeleton.roots.join(', ')">{{ skeleton.rigs.join(', ') || '—' }}</dd>
+          </div>
+        </dl>
+        <p class="usage-note">
+          亮青线 = 骨节链,暗线 = 骨节驱动到的网格中心,红绿蓝短轴 = 骨节局部 XYZ。
+        </p>
       </section>
 
       <section class="section">
@@ -495,12 +591,14 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { GlbViewer, DEFAULT_LIGHT_SETTINGS } from '../../lib/three-engine/glb-viewer'
 import type {
+  GlbAnimationLoopMode,
   GlbAnimationState,
   GlbExportResult,
   GlbLoadStatus,
   GlbModelStats,
   GlbNodeInfo,
   GlbNodeKind,
+  GlbRigInfo,
   GlbTreeNode,
   GlbViewOptions,
   LightSettings,
@@ -576,6 +674,17 @@ const VIEW_OPTIONS: Array<{ key: ViewOptionKey; label: string }> = [
   { key: 'autoRotate', label: '自动旋转' },
   { key: 'wireframe', label: '线框模式' },
 ]
+
+const LOOP_LABELS: Record<GlbAnimationLoopMode, string> = {
+  repeat: '循环播放',
+  pingpong: '往返播放',
+  once: '单次播放',
+}
+
+/** 循环方式按钮的轮换顺序:折叠/展开这类动作默认往返最直观 */
+const LOOP_CYCLE: GlbAnimationLoopMode[] = ['repeat', 'pingpong', 'once']
+
+const SPEED_PRESETS = [0.25, 0.5, 1, 2]
 
 const BLOOM_ROWS: Array<{
   key: BloomSettingsKey
@@ -663,7 +772,20 @@ const animation = reactive<GlbAnimationState>({
   playing: false,
   duration: 0,
   speed: 1,
+  time: 0,
+  frameStep: 1 / 30,
+  loop: 'repeat',
 })
+const skeleton = reactive<GlbRigInfo>({
+  bones: 0,
+  roots: [],
+  rigs: [],
+  hasSkeleton: false,
+  visible: false,
+})
+
+/** 时间轴步长:直接用动画自身的单帧时长,拖动时能停在任何一帧上 */
+const timelineStep = computed(() => (animation.frameStep > 0 ? animation.frameStep : 1 / 30))
 
 const hasModel = computed(() => stats.value !== null)
 const fpsText = computed(() => (fps.value > 0 ? `FPS ${fps.value}` : 'FPS --'))
@@ -771,6 +893,11 @@ onMounted(async () => {
   instance.onHover = (id) => {
     hoverId.value = id
   }
+  // 播放中由引擎每帧推进度,时间轴才跟得动(400ms 轮询只做结构性同步)
+  instance.onAnimationTick = (state) => {
+    animation.time = state.time
+    if (animation.playing !== state.playing) animation.playing = state.playing
+  }
 
   await instance.init()
   if (viewer !== instance) return
@@ -815,6 +942,7 @@ function syncFromViewer(): void {
   nodeInfo.value = null
   keyword.value = ''
   Object.assign(animation, viewer.getAnimationState())
+  Object.assign(skeleton, viewer.getRigInfo())
   Object.assign(lightSettings, viewer.getLightSettings())
   Object.assign(view, viewer.getViewOptions())
   explodeAmount.value = viewer.getExplodeAmount()
@@ -1120,9 +1248,66 @@ function onClipChange(event: Event): void {
 }
 
 function onSpeedInput(event: Event): void {
-  const value = Number((event.target as HTMLInputElement).value)
+  setAnimationSpeed(Number((event.target as HTMLInputElement).value))
+}
+
+function setAnimationSpeed(value: number): void {
   animation.speed = value
   viewer?.setAnimationSpeed(value)
+}
+
+function formatTime(seconds: number): string {
+  return `${seconds.toFixed(2)}s`
+}
+
+/** 时间轴:拖拽时先暂停(松手后恢复),避免播放推进和手动定位互相打架。 */
+let resumeAfterScrub = false
+
+function beginScrub(): void {
+  if (!viewer) return
+  resumeAfterScrub = animation.playing
+  if (animation.playing) {
+    viewer.setAnimationPlaying(false)
+    Object.assign(animation, viewer.getAnimationState())
+  }
+}
+
+function onSeekInput(event: Event): void {
+  const value = Number((event.target as HTMLInputElement).value)
+  animation.time = value
+  viewer?.seek(value)
+}
+
+function endScrub(): void {
+  if (!viewer) return
+  if (resumeAfterScrub) viewer.setAnimationPlaying(true)
+  resumeAfterScrub = false
+  Object.assign(animation, viewer.getAnimationState())
+}
+
+/** 逐帧步进(自动暂停,和视频播放器一致)。 */
+function stepFrame(direction: number): void {
+  if (!viewer) return
+  viewer.stepFrame(direction)
+  Object.assign(animation, viewer.getAnimationState())
+}
+
+function restartAnimation(): void {
+  if (!viewer) return
+  viewer.restartAnimation()
+  Object.assign(animation, viewer.getAnimationState())
+}
+
+function cycleLoopMode(): void {
+  const current = LOOP_CYCLE.indexOf(animation.loop)
+  const next = LOOP_CYCLE[(current + 1) % LOOP_CYCLE.length] ?? 'repeat'
+  animation.loop = next
+  viewer?.setLoopMode(next)
+}
+
+function setSkeleton(visible: boolean): void {
+  skeleton.visible = visible
+  viewer?.setSkeletonVisible(visible)
 }
 
 // ————————————————————————— 文件导入 —————————————————————————
@@ -1919,6 +2104,38 @@ function onDrop(event: DragEvent): void {
     SFMono-Regular,
     Consolas,
     monospace;
+}
+.timeline {
+  margin: 2px 0 8px;
+}
+.timeline-range {
+  width: 100%;
+  height: 3px;
+  accent-color: #79e6ca;
+  cursor: pointer;
+}
+.timeline-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #7fb3a9;
+  font:
+    500 9px/1.2 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.button-row.two {
+  grid-template-columns: repeat(2, 1fr);
+}
+.button-row.three {
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 4px;
+}
+.button-row button.active {
+  color: #06201d;
+  background: #79e6ca;
+  border-color: #b4ffeb;
 }
 .clip-select {
   width: 100%;

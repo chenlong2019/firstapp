@@ -96,6 +96,7 @@ export type FlightPhase =
   | 'motorsOn'
   | 'takingOff'
   | 'flying'
+  | 'waypoint'
   | 'rth'
   | 'landing'
   | 'emergency'
@@ -109,6 +110,7 @@ export const PHASE_LABELS: Record<FlightPhase, string> = {
   motorsOn: '电机已启动',
   takingOff: '自动起飞',
   flying: '飞行中',
+  waypoint: '航线执行',
   rth: '智能返航',
   landing: '自动降落',
   emergency: '动力丧失 · 坠落',
@@ -195,6 +197,150 @@ export const DEFAULT_CONFIG: SimConfig = {
   criticalBatteryPercent: 10,
   rcFailsafe: 'rth',
   timeScale: 1,
+}
+
+// ————————————————————————————— 航线任务 —————————————————————————————
+
+/**
+ * 单个航点(对齐真机航点任务的字段子集)。
+ *
+ * 坐标与遥测同一套约定:x 向东、z 向南(与模型坐标一致),altitude 是**相对起飞点高度(AGL)**。
+ */
+export interface MissionWaypoint {
+  x: number
+  z: number
+  /** 目标高度(AGL,米) */
+  altitude: number
+  /** 过点速度(m/s);0 = 使用任务巡航速度 */
+  speed: number
+  /** 到点悬停时间(秒);0 = 不停留,直接飞下一个点 */
+  hoverSeconds: number
+  /** 到点后云台俯仰角(度);null = 不动云台 */
+  gimbalPitch: number | null
+  /** 到点动作 */
+  action: 'none' | 'photo'
+}
+
+/** 机头朝向策略:auto = 始终机头指向下一航点;fixed = 保持任务开始时的航向 */
+export type MissionHeadingMode = 'auto' | 'fixed'
+/** 过点方式:straight = 到点减速后再走;curved = 圆滑过点(不减速) */
+export type MissionPathMode = 'straight' | 'curved'
+/** 任务结束动作,对齐真机 WaypointMissionFinishedAction */
+export type MissionFinishAction = 'hover' | 'rth' | 'land'
+
+export interface MissionConfig {
+  /** 巡航速度(m/s):航点未单独指定速度时用它 */
+  autoSpeed: number
+  headingMode: MissionHeadingMode
+  pathMode: MissionPathMode
+  /** 全部航点完成后 */
+  finishAction: MissionFinishAction
+  /** 循环执行:完成后回到第一个航点继续 */
+  loop: boolean
+}
+
+export type MissionStatus = 'idle' | 'running' | 'paused'
+
+export const MISSION_STATUS_LABELS: Record<MissionStatus, string> = {
+  idle: '未执行',
+  running: '执行中',
+  paused: '已暂停',
+}
+
+export const MISSION_STAGE_LABELS: Record<MissionStage, string> = {
+  idle: '待执行',
+  'depart-climb': '垂直调整到首航点高度',
+  'depart-cruise': '水平飞向首个航点',
+  'depart-settle': '调整到航点高度',
+  'depart-align': '对准航线方向',
+  goto: '飞向航点',
+  hover: '航点悬停',
+}
+
+/**
+ * 任务执行阶段。
+ *
+ * 飞第一个航点前有一段「启航四步」,和智能返航同款的分段机动:
+ * 先把高度调到首航点高度(**垂直段只动高度,不产生水平位移**,否则会斜着冲过去) →
+ * 再保持该高度水平飞向首航点 → 到了把高度收干净 → 最后原地把机头转到与航线一致,
+ * 之后才进入常规的 goto / hover 推进。
+ */
+export type MissionStage =
+  | 'idle'
+  | 'depart-climb'
+  | 'depart-cruise'
+  | 'depart-settle'
+  | 'depart-align'
+  | 'goto'
+  | 'hover'
+
+/** 是否为「启航段」阶段(首航点的分段机动) */
+export function isMissionDepartStage(stage: MissionStage): boolean {
+  return stage.startsWith('depart-')
+}
+
+export const DEFAULT_MISSION_CONFIG: MissionConfig = {
+  autoSpeed: 6,
+  headingMode: 'auto',
+  pathMode: 'straight',
+  finishAction: 'hover',
+  loop: false,
+}
+
+/** 出厂示例航线:环绕起飞点一圈(最高 40 m,悬在 13 m 的建筑之上,不会触发避障刹停) */
+export const DEFAULT_MISSION: MissionWaypoint[] = [
+  { x: 0, z: -32, altitude: 35, speed: 6, hoverSeconds: 2, gimbalPitch: -40, action: 'photo' },
+  { x: 32, z: -32, altitude: 40, speed: 6, hoverSeconds: 0, gimbalPitch: null, action: 'none' },
+  { x: 32, z: 18, altitude: 40, speed: 6, hoverSeconds: 0, gimbalPitch: null, action: 'none' },
+  { x: 0, z: 18, altitude: 30, speed: 6, hoverSeconds: 3, gimbalPitch: -60, action: 'photo' },
+  { x: -28, z: 0, altitude: 35, speed: 6, hoverSeconds: 0, gimbalPitch: null, action: 'none' },
+]
+
+/** 单个航点字段归一化(手输/外部传入都可能越界) */
+export function normalizeMissionWaypoint(source: Partial<MissionWaypoint>): MissionWaypoint {
+  const number = (value: unknown, fallback: number): number =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback
+  const pitch = source.gimbalPitch
+  return {
+    x: number(source.x, 0),
+    z: number(source.z, 0),
+    altitude: clamp(number(source.altitude, 30), 1, 500),
+    speed: clamp(number(source.speed, 0), 0, 16),
+    hoverSeconds: clamp(number(source.hoverSeconds, 0), 0, 60),
+    gimbalPitch:
+      typeof pitch === 'number' && Number.isFinite(pitch)
+        ? clamp(pitch, DRONE_SPEC.gimbalPitchMin, DRONE_SPEC.gimbalPitchMax)
+        : null,
+    action: source.action === 'photo' ? 'photo' : 'none',
+  }
+}
+
+/** 航线任务的实时进度(界面轮询用) */
+export interface MissionSnapshot {
+  status: MissionStatus
+  statusLabel: string
+  stage: MissionStage
+  stageLabel: string
+  /** 当前目标航点索引(0 基);-1 = 无 */
+  index: number
+  total: number
+  /** 已完成的整圈数 */
+  passes: number
+  /** 任务已执行时长(秒) */
+  elapsed: number
+  /** 剩余航程(米,含高度差) */
+  distanceLeft: number
+  /** 按航程折算的完成度 0~1 */
+  progress: number
+  /** 预计剩余时间(秒,含悬停) */
+  etaSeconds: number
+  /** 暂停原因 */
+  pauseReason: string
+  /** 当前目标航点副本 */
+  active: MissionWaypoint | null
+  /** 航线航点列表副本(界面据此渲染) */
+  waypoints: MissionWaypoint[]
+  config: MissionConfig
 }
 
 export type EventLevel = 'info' | 'warn' | 'error' | 'success'
@@ -292,6 +438,8 @@ export interface DroneSnapshot {
   criticalBattery: boolean
   lowBatteryCountdown: number
   rthStage: string
+  /** 自动降落的细分阶段:approach=降向低位悬停位 / hold=低位悬停确认 / settle=缓慢触地 */
+  landingStage: string
   rthReason: string
   warnings: string[]
   events: SimEvent[]
@@ -301,6 +449,8 @@ export interface DroneSnapshot {
   recordSeconds: number
   photoCount: number
   cameraZoom: number
+  /** 航线任务进度 */
+  mission: MissionSnapshot
 }
 
 const GRAVITY = 9.81
@@ -310,6 +460,34 @@ const RC_FAILSAFE_DELAY = 3
 const LOW_BATTERY_COUNTDOWN = 10
 const GNSS_ACQUIRE_RATE = 1.6
 const VISION_MAX_ALTITUDE = 12
+/** 智能返航:机头与返航航向的夹角小于这个值才允许前进(度) */
+const RTH_ALIGN_TOLERANCE_DEG = 12
+/** 智能返航的转向角速度(度/秒):原地对准与巡航段共用 */
+const RTH_YAW_RATE_DEG = 45
+/** 自动降落的低位悬停高度(米):先降到这个高度稳住,再缓慢触地 */
+const LANDING_HOLD_ALTITUDE_M = 1
+/** 低位悬停的停顿时间(秒):停一下让飞手看清落点 */
+const LANDING_HOLD_SECONDS = 1
+/** 悬停确认后的触地速度(米/秒):比常规下降慢得多 */
+const LANDING_FINAL_DESCENT_RATE = 0.3
+/** 航线任务:判定"已到达航点"的水平半径(米) */
+const MISSION_ARRIVE_RADIUS = 0.9
+/** 航线任务:到达航点时允许的高度误差(米) */
+const MISSION_ARRIVE_ALTITUDE_TOLERANCE = 0.8
+/** 航线任务:曲线过点的切角半径(米),距航点这么远就切向下一个点 */
+const MISSION_CURVED_TURN_RADIUS = 3
+/** 航线任务:机头转向下一航点的角速度(度/秒) */
+const MISSION_YAW_RATE_DEG = 60
+/** 航线任务:单个航点的最长飞行时限(秒),超时视为不可达并跳过 */
+const MISSION_WAYPOINT_TIMEOUT = 90
+/** 启航段:水平飞向首航点的到位半径(米)。比常规航点小得多 —— 启航要落到点上,不然对准航线时会有一次肉眼可见的位移 */
+const MISSION_DEPART_ARRIVE_RADIUS = 0.25
+/** 启航段:垂直调整到首航点高度的到位容差(米) */
+const MISSION_DEPART_ALTITUDE_TOLERANCE = 0.3
+/** 启航段:到达首航点后高度收尾的到位容差(米) */
+const MISSION_DEPART_SETTLE_TOLERANCE = 0.15
+/** 启航段:机头对准航线方向的到位容差(度) */
+const MISSION_DEPART_ALIGN_TOLERANCE = 2.5
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value))
 const lerp = (from: number, to: number, t: number): number => from + (to - from) * t
@@ -351,6 +529,15 @@ export class DroneSim {
   gimbalRoll = 0
   gimbalYaw = 0
 
+  /** 航线任务:航点列表(出厂带一条示例航线,方便一键演示) */
+  mission: MissionWaypoint[] = DEFAULT_MISSION.map((waypoint) => ({ ...waypoint }))
+  missionConfig: MissionConfig = { ...DEFAULT_MISSION_CONFIG }
+  missionStatus: MissionStatus = 'idle'
+  /** 当前目标航点索引(0 基),-1 表示没有在执行的航点 */
+  missionIndex = -1
+  /** 当前任务阶段(未执行任务时为 'idle') */
+  missionStage: MissionStage = 'idle'
+
   events: SimEvent[] = []
 
   private time = 0
@@ -384,8 +571,37 @@ export class DroneSim {
   private eventId = 0
   private readonly warnedAt = new Map<string, number>()
   private landingTimer = 0
+  /** 降落细分阶段:先降向 1 米悬停位,停一下再缓速触地 */
+  private landingStage: 'approach' | 'hold' | 'settle' = 'approach'
+  private landingHoldTimer = 0
+  /** 航线任务:已下发但等起飞完成后才开始执行 */
+  private missionPending = false
+  /** 航线任务:起始航向(headingMode='fixed' 时保持不变) */
+  private missionStartHeading = 0
+  /** 航线任务:起步保护期,避免启动瞬间被残留摇杆指令打断 */
+  private missionStickGrace = 0
+  private missionHoverTimer = 0
+  /** 当前航点已耗时(超时保护) */
+  private missionWaypointTimer = 0
+  private missionElapsed = 0
+  private missionPasses = 0
+  private missionPauseReason = ''
+  /** 暂停前所处的阶段:继续执行时按它决定是接着走启航段还是直接飞航点 */
+  private missionPausedStage: MissionStage = 'idle'
+  /** 任务起始时的总航程(米),仅用于进度条 */
+  private missionTotalDistance = 0
 
   // ————————————————————————————— 状态查询 —————————————————————————————
+
+  /** 降落细分标签:低位悬停确认是飞手最关心的一步,单独标出来 */
+  private get phaseLabel(): string {
+    if (this.phase === 'landing') {
+      if (this.landingStage === 'hold') return `降落 · ${LANDING_HOLD_ALTITUDE_M} 米悬停确认`
+      if (this.landingStage === 'settle') return '降落 · 缓慢触地'
+      if (this.landingStage === 'approach') return '降落 · 下降至悬停位'
+    }
+    return PHASE_LABELS[this.phase]
+  }
 
   get airborne(): boolean {
     return this.position.y > 0.05 && this.phase !== 'powerOff'
@@ -480,6 +696,12 @@ export class DroneSim {
     if (this.airborne || this.phase === 'powerOff') return
     this.phase = 'powerOff'
     this.motorLoad = 0
+    // 已下发但尚未起飞的航线随关机一起作废
+    if (this.missionPending) {
+      this.missionPending = false
+      this.missionStatus = 'idle'
+      this.missionIndex = -1
+    }
     if (this.recording) this.stopRecording()
     this.pushEvent('info', '飞行器已关机')
   }
@@ -536,8 +758,11 @@ export class DroneSim {
   startLanding(): boolean {
     if (!this.airborne && this.phase !== 'takingOff') return false
     if (this.phase === 'landing' || this.phase === 'emergency') return false
+    this.abortMission('触发自动降落')
     this.phase = 'landing'
     this.phaseTime = 0
+    this.landingTimer = 0
+    this.beginLandingDescent()
     this.pushEvent('info', '开始自动降落')
     return true
   }
@@ -545,6 +770,8 @@ export class DroneSim {
   startRth(reason: string): boolean {
     if (!this.airborne) return false
     if (this.phase === 'rth') return false
+    // 返航优先级高于航线任务:真机触发返航会同时中止未完成的航线
+    this.abortMission('触发返航')
     this.phase = 'rth'
     this.phaseTime = 0
     this.rthStage = this.position.y < this.config.rthAltitude - 0.5 ? 'ascend' : 'cruise'
@@ -593,6 +820,16 @@ export class DroneSim {
     this.recording = false
     this.recordSeconds = 0
     this.rthReason = ''
+    // 航线任务一并复位(静默,不写日志:重置本身就是"回到出厂")
+    this.missionStatus = 'idle'
+    this.missionIndex = -1
+    this.missionStage = 'idle'
+    this.missionPending = false
+    this.missionHoverTimer = 0
+    this.missionWaypointTimer = 0
+    this.missionElapsed = 0
+    this.missionPasses = 0
+    this.missionPauseReason = ''
     this.pushEvent('info', '沙盒已重置')
   }
 
@@ -603,6 +840,8 @@ export class DroneSim {
     if (delta <= 0) return
     this.time += delta
     this.phaseTime += delta
+    // 录像计时与电源状态无关(相机录制本身由引擎层的 MediaRecorder 负责)
+    if (this.recording) this.recordSeconds += delta
 
     if (this.phase === 'powerOff') {
       this.motorLoad = lerp(this.motorLoad, 0, Math.min(1, delta * 6))
@@ -648,14 +887,19 @@ export class DroneSim {
         this.settleHorizontal(delta)
         if (this.position.y >= DRONE_SPEC.takeoffAltitude - 0.01) {
           this.position.y = DRONE_SPEC.takeoffAltitude
-          this.phase = 'flying'
           this.velocity.y = 0
-          this.pushEvent('success', '已到达 1.2 米,进入悬停')
+          if (this.missionPending) {
+            // 航线下发时飞机还在地面:起飞到位后自动接上航线
+            this.beginMissionPath()
+          } else {
+            this.phase = 'flying'
+            this.pushEvent('success', '已到达 1.2 米,进入悬停')
+          }
         }
         break
       }
       case 'landing':
-        this.descendToGround(delta, this.landingDescentRate())
+        this.updateLanding(delta)
         break
       case 'emergency':
         this.applyGravityFall(delta)
@@ -670,16 +914,47 @@ export class DroneSim {
     }
   }
 
-  private landingDescentRate(): number {
-    return this.position.y <= DRONE_SPEC.landingSlowAltitude ? 0.6 : this.modeSpec.descendSpeed
+  /** 按下降落:高于悬停位则先降向 1 米,已经贴地则直接缓降 */
+  private beginLandingDescent(): void {
+    this.landingHoldTimer = 0
+    this.landingStage = this.position.y > LANDING_HOLD_ALTITUDE_M + 0.05 ? 'approach' : 'settle'
   }
 
-  /** 返航与降落的下降段:接触地面后停桨 */
-  private descendToGround(delta: number, rate: number): void {
+  /**
+   * 自动降落:降向 1 米悬停位 → 稳住一下 → 缓慢触地。
+   * 真机不会从巡航高度一路匀速直插地面;低位那一下停顿既是确认落点,也是留给飞手接管的时间。
+   */
+  private updateLanding(delta: number): void {
     this.motorLoad = lerp(this.motorLoad, 0.55, Math.min(1, delta * 3))
-    this.velocity.y = -rate
-    this.position.y -= rate * delta
     this.settleHorizontal(delta)
+
+    if (this.landingStage === 'approach') {
+      const rate = this.position.y <= DRONE_SPEC.landingSlowAltitude ? 0.6 : this.modeSpec.descendSpeed
+      this.velocity.y = -rate
+      this.position.y -= rate * delta
+      if (this.position.y <= LANDING_HOLD_ALTITUDE_M) {
+        this.position.y = LANDING_HOLD_ALTITUDE_M
+        this.velocity.y = 0
+        this.enterLandingHold()
+      }
+      return
+    }
+
+    if (this.landingStage === 'hold') {
+      // 低位悬停:高度锁死不动,等停顿走完再缓降
+      this.position.y = LANDING_HOLD_ALTITUDE_M
+      this.velocity.y = 0
+      this.landingHoldTimer += delta
+      if (this.landingHoldTimer >= LANDING_HOLD_SECONDS) {
+        this.landingStage = 'settle'
+        this.pushEvent('info', '悬停确认完成,开始缓慢降落')
+      }
+      return
+    }
+
+    // 缓速触地:接触地面后停桨
+    this.velocity.y = -LANDING_FINAL_DESCENT_RATE
+    this.position.y -= LANDING_FINAL_DESCENT_RATE * delta
     if (this.position.y <= 0.02) {
       this.position.y = 0
       this.velocity.y = 0
@@ -692,9 +967,18 @@ export class DroneSim {
     }
   }
 
+  /** 进入 1 米悬停位(手动降落与返航下降段共用) */
+  private enterLandingHold(): void {
+    this.landingStage = 'hold'
+    this.landingHoldTimer = 0
+    this.pushEvent('info', `已到达 ${LANDING_HOLD_ALTITUDE_M} 米悬停位,确认后缓降`)
+  }
+
   private finishLanding(): void {
     this.phase = 'standby'
     this.landingTimer = 0
+    this.landingHoldTimer = 0
+    this.landingStage = 'settle'
     this.motorLoad = 0
     this.velocity = { x: 0, y: 0, z: 0 }
     if (this.recording) this.stopRecording()
@@ -739,8 +1023,13 @@ export class DroneSim {
   // ————————————————————————————— 手动飞行 —————————————————————————————
 
   private updateFlight(delta: number): void {
-    if (this.phase === 'flying' || this.phase === 'rth') {
-      this.updateGnssPositionFlight(delta)
+    if (this.phase === 'flying' || this.phase === 'rth' || this.phase === 'waypoint') {
+      // 航线任务自己算航迹(不受摇杆指令直接驱动),其余两态走手动/返航通道
+      if (this.phase === 'waypoint') {
+        this.updateMission(delta)
+      } else {
+        this.updateGnssPositionFlight(delta)
+      }
       this.updateMotorLoad(delta)
     }
     this.updateTilt(delta)
@@ -918,26 +1207,38 @@ export class DroneSim {
         this.rthStage = 'descend'
         this.pushEvent('info', '已到达返航点上方,开始下降')
       } else {
-        const cruiseSpeed = Math.min(spec.horizontalSpeed, Math.max(2, distance * 0.5))
         const dirX = dx / distance
         const dirZ = dz / distance
-        this.velocity.x = lerp(this.velocity.x, dirX * cruiseSpeed, Math.min(1, delta * 1.6))
-        this.velocity.z = lerp(this.velocity.z, dirZ * cruiseSpeed, Math.min(1, delta * 1.6))
-        // 返航时机头对准航向
-        this.heading = this.turnToward(this.heading, radToDeg(Math.atan2(dirX, -dirZ)), 45 * delta)
+        const targetHeading = radToDeg(Math.atan2(dirX, -dirZ))
+        const headingError = Math.abs(((targetHeading - this.heading + 540) % 360) - 180)
         this.velocity.y = lerp(this.velocity.y, 0, Math.min(1, delta * 2))
+        if (headingError > RTH_ALIGN_TOLERANCE_DEG) {
+          // 真机返航是"先对准、再前进":机头转到返航航向之前原地悬停转向,
+          // 不带着位移一起转(否则会飞出一条弧线,航迹也对不上返航点)
+          this.velocity.x = lerp(this.velocity.x, 0, Math.min(1, delta * 8))
+          this.velocity.z = lerp(this.velocity.z, 0, Math.min(1, delta * 8))
+          this.heading = this.turnToward(this.heading, targetHeading, RTH_YAW_RATE_DEG * delta)
+        } else {
+          const cruiseSpeed = Math.min(spec.horizontalSpeed, Math.max(2, distance * 0.5))
+          this.velocity.x = lerp(this.velocity.x, dirX * cruiseSpeed, Math.min(1, delta * 1.6))
+          this.velocity.z = lerp(this.velocity.z, dirZ * cruiseSpeed, Math.min(1, delta * 1.6))
+          // 对准之后机头即航向,前进方向与机头一致
+          this.heading = this.turnToward(this.heading, targetHeading, RTH_YAW_RATE_DEG * delta)
+        }
       }
     } else if (this.rthStage === 'descend') {
       this.velocity.x = lerp(this.velocity.x, 0, Math.min(1, delta * 3))
       this.velocity.z = lerp(this.velocity.z, 0, Math.min(1, delta * 3))
       this.velocity.y = -spec.descendSpeed
       this.integratePosition(delta)
-      if (this.position.y <= 0.02) {
+      if (this.position.y <= LANDING_HOLD_ALTITUDE_M) {
+        // 降到 1 米悬停位就交给降落阶段:先稳住,再缓慢触地
         this.rthStage = 'landing'
         this.phase = 'landing'
         this.landingTimer = 0
-        this.position.y = 0
+        this.position.y = LANDING_HOLD_ALTITUDE_M
         this.velocity.y = 0
+        this.enterLandingHold()
       }
       return
     } else {
@@ -951,6 +1252,623 @@ export class DroneSim {
     let difference = ((target - current + 540) % 360) - 180
     difference = clamp(difference, -maxDelta, maxDelta)
     return (current + difference + 360) % 360
+  }
+
+  // ————————————————————————————— 航线任务 —————————————————————————————
+
+  /** 设置航点列表(执行中禁止修改,与真机"上传后不可改"一致) */
+  setMission(waypoints: Array<Partial<MissionWaypoint>>): boolean {
+    if (this.missionStatus !== 'idle' || this.missionPending) {
+      this.pushEvent('warn', '航线执行中无法修改航点列表,请先停止任务')
+      return false
+    }
+    this.mission = waypoints.map((waypoint) => normalizeMissionWaypoint(waypoint))
+    this.missionIndex = -1
+    this.missionStage = 'idle'
+    return true
+  }
+
+  /**
+   * 只改一个航点(列表编辑与场景内拖拽共用)。
+   *
+   * 与 `setMission` 的区别:不整表替换、不重排,因此执行进度、其他航点的引用都保持原样 ——
+   * 场景里拖动航点时每帧都要下发一次,用整表替换会连带重建整套三维标记。
+   *
+   * 返回值是**归一化并夹紧后**的航点(限高/限距),调用方拿它当权威值,别用自己算的原始值。
+   */
+  updateMissionWaypoint(index: number, patch: Partial<MissionWaypoint>): MissionWaypoint | null {
+    if (this.missionStatus !== 'idle' || this.missionPending) return null
+    const current = this.mission[index]
+    if (!current) return null
+    const next = normalizeMissionWaypoint({ ...current, ...patch })
+    this.constrainMissionWaypoint(next)
+    this.mission[index] = next
+    return next
+  }
+
+  /**
+   * 插入一个航点(场景内双击地面新增)。index 越界则追加到末尾,返回实际插入位置。
+   * 与真机一致:新航点的高度默认取相邻航点,避免插一个 0 米高、撞地的点。
+   */
+  addMissionWaypoint(waypoint: Partial<MissionWaypoint>, index = this.mission.length): number {
+    if (this.missionStatus !== 'idle' || this.missionPending) {
+      this.pushEvent('warn', '航线执行中无法新增航点,请先停止任务')
+      return -1
+    }
+    const at = clamp(Math.round(index), 0, this.mission.length)
+    const next = normalizeMissionWaypoint(waypoint)
+    this.constrainMissionWaypoint(next)
+    const list = this.mission.slice()
+    list.splice(at, 0, next)
+    this.mission = list
+    return at
+  }
+
+  /** 删除一个航点,返回是否删掉了 */
+  removeMissionWaypoint(index: number): boolean {
+    if (this.missionStatus !== 'idle' || this.missionPending) {
+      this.pushEvent('warn', '航线执行中无法删除航点,请先停止任务')
+      return false
+    }
+    if (index < 0 || index >= this.mission.length) return false
+    const list = this.mission.slice()
+    list.splice(index, 1)
+    this.mission = list
+    return true
+  }
+
+  /** 把一个航点夹进可执行范围:高度不超限高,水平距离不超限距(超出则沿返航点方向缩回) */
+  private constrainMissionWaypoint(waypoint: MissionWaypoint): void {
+    waypoint.altitude = clamp(waypoint.altitude, 1, this.config.maxAltitude)
+    const offsetX = waypoint.x - this.home.x
+    const offsetZ = waypoint.z - this.home.z
+    const distance = Math.hypot(offsetX, offsetZ)
+    if (distance <= this.config.maxDistance) return
+    const scale = this.config.maxDistance / distance
+    waypoint.x = this.home.x + offsetX * scale
+    waypoint.z = this.home.z + offsetZ * scale
+  }
+
+  setMissionConfig(patch: Partial<MissionConfig>): void {
+    this.missionConfig = { ...this.missionConfig, ...patch }
+  }
+
+  /** 恢复出厂示例航线 */
+  resetMissionToDefault(): void {
+    this.setMission(DEFAULT_MISSION.map((waypoint) => ({ ...waypoint })))
+  }
+
+  /**
+   * 启动航线任务。
+   * - 地面待机时先自动起飞,到 1.2 米后自动接上航线(对应 Pilot 里的"执行航线");
+   * - 已在空中则直接飞向第一个航点(正在返航会先中止返航);
+   * - 姿态模式(无定位)拒绝执行 —— 航点任务依赖 GNSS,真机同样如此。
+   */
+  startMission(): boolean {
+    if (this.missionStatus !== 'idle' || this.missionPending) return false
+    if (this.mission.length === 0) {
+      this.pushEvent('error', '航线任务启动失败:航点列表为空')
+      return false
+    }
+    const problem = this.validateMission()
+    if (problem) {
+      this.pushEvent('error', `航线任务启动失败:${problem}`)
+      return false
+    }
+    if (this.positionSource === 'atti') {
+      this.pushEvent('error', '航线任务启动失败:当前无定位(姿态模式),航点任务需要 GNSS 定位')
+      return false
+    }
+    if (this.phase === 'standby' || this.phase === 'motorsOn' || this.phase === 'takingOff') {
+      const needsTakeOff = this.phase !== 'takingOff'
+      this.missionPending = true
+      if (needsTakeOff && !this.autoTakeOff()) {
+        this.missionPending = false
+        return false
+      }
+      this.pushEvent('info', `航线已下发(${this.mission.length} 个航点),起飞到位后自动开始执行`)
+      return true
+    }
+    if (
+      this.phase === 'landing' ||
+      this.phase === 'emergency' ||
+      this.phase === 'stopped' ||
+      this.phase === 'powerOff'
+    ) {
+      this.pushEvent('error', `航线任务启动失败:当前阶段(${PHASE_LABELS[this.phase]})无法执行`)
+      return false
+    }
+    if (this.phase === 'rth') this.cancelRth('执行航线任务')
+    this.beginMissionPath()
+    return true
+  }
+
+  /** 进入航线执行态(已在空中的入口) */
+  /**
+   * 进入航线执行态(已在空中 / 起飞到位后的入口)。
+   * 无论是地面起飞接上航线还是空中直接下发,都先从「启航四步」走起 ——
+   * 垂直调整到首航点高度 → 水平飞过去 → 高度收尾 → 对准航线方向,然后才开始推航点。
+   */
+  private beginMissionPath(): void {
+    this.missionPending = false
+    this.missionStatus = 'running'
+    this.missionIndex = 0
+    this.missionStage = 'depart-climb'
+    this.missionHoverTimer = 0
+    this.missionWaypointTimer = 0
+    this.missionElapsed = 0
+    this.missionPasses = 0
+    this.missionStickGrace = 1
+    this.missionPauseReason = ''
+    this.missionStartHeading = this.heading
+    this.missionTotalDistance = this.computeMissionDistanceLeft()
+    this.phase = 'waypoint'
+    this.phaseTime = 0
+    const first = this.mission[0]
+    this.pushEvent(
+      'success',
+      `开始执行航线任务(${this.mission.length} 个航点 · 巡航 ${this.missionConfig.autoSpeed} m/s)${
+        first ? ` · 先垂直调整到 ${first.altitude} 米` : ''
+      }`,
+    )
+  }
+
+  /** 暂停任务:交回手动控制并原地悬停,航点进度保留 */
+  pauseMission(reason = '用户暂停'): boolean {
+    if (this.missionStatus !== 'running') return false
+    this.missionStatus = 'paused'
+    this.missionPauseReason = reason
+    this.missionPausedStage = this.missionStage
+    this.velocity = { x: 0, y: 0, z: 0 }
+    if (this.phase === 'waypoint') this.phase = 'flying'
+    this.pushEvent('warn', `航线任务已暂停(${reason}),可手动接管;点「继续」回到当前航点`)
+    return true
+  }
+
+  /** 继续任务:回到当前目标航点(首航点还没走完启航段的话接着走) */
+  resumeMission(): boolean {
+    if (this.missionStatus !== 'paused') return false
+    this.missionStatus = 'running'
+    this.missionPauseReason = ''
+    this.missionStickGrace = 1
+    this.missionWaypointTimer = 0
+    // 暂停期间可能被手动飞走了:按当前位置重新判断启航段走到哪一步(幂等)
+    this.missionStage = isMissionDepartStage(this.missionPausedStage)
+      ? this.resolveMissionDepartStage()
+      : 'goto'
+    if (this.airborne) this.phase = 'waypoint'
+    this.pushEvent('info', `航线任务继续执行(航点 ${this.missionIndex + 1}/${this.mission.length})`)
+    return true
+  }
+
+  /** 停止任务:飞机原地悬停,航线归零(真机"停止任务"不返航) */
+  stopMission(reason = '用户停止'): boolean {
+    if (this.missionStatus === 'idle' && !this.missionPending) return false
+    this.missionPending = false
+    this.abortMission(reason)
+    if (this.phase === 'waypoint') {
+      this.phase = 'flying'
+      this.velocity = { x: 0, y: 0, z: 0 }
+    }
+    return true
+  }
+
+  /** 中止任务(内部使用:返航/降落等更高优先级动作会走到这里) */
+  private abortMission(reason: string): void {
+    if (this.missionStatus === 'idle' && !this.missionPending) return
+    this.missionStatus = 'idle'
+    this.missionIndex = -1
+    this.missionStage = 'idle'
+    this.missionPending = false
+    this.missionHoverTimer = 0
+    this.missionWaypointTimer = 0
+    this.missionPauseReason = ''
+    this.pushEvent('warn', `航线任务已中止(${reason})`)
+  }
+
+  /** 航点合法性校验(限高限距):真机在上传航线时就会拦下这类航点 */
+  private validateMission(): string | null {
+    for (let index = 0; index < this.mission.length; index += 1) {
+      const waypoint = this.mission[index]
+      if (!waypoint) continue
+      if (waypoint.altitude > this.config.maxAltitude) {
+        return `航点 ${index + 1} 高度 ${waypoint.altitude} m 超过限高 ${this.config.maxAltitude} m`
+      }
+      const distance = Math.hypot(waypoint.x - this.home.x, waypoint.z - this.home.z)
+      if (distance > this.config.maxDistance) {
+        return `航点 ${index + 1} 距返航点 ${distance.toFixed(0)} m,超过限距 ${this.config.maxDistance} m`
+      }
+    }
+    return null
+  }
+
+  /**
+   * 航线任务每帧推进。
+   *
+   * 真机飞航线的三个观感要点都在这里:
+   * - **先对准再前进**:headingMode='auto' 时机头没转到航向之前原地悬停转向,否则会飞出一条弧线;
+   * - **到点减速**:直线模式下按刹车距离提前收油,过点不甩过头;曲线模式则保持巡航速度、
+   *   距航点 3 米就切下一个点,形成圆滑切角;
+   * - **打杆即暂停**:执行中拨动摇杆 → 任务暂停并交回手动控制(与 Pilot 行为一致)。
+   */
+  private updateMission(delta: number): void {
+    this.missionStickGrace = Math.max(0, this.missionStickGrace - delta)
+    const stickMagnitude = Math.hypot(
+      this.stick.pitch,
+      this.stick.roll,
+      this.stick.throttle,
+      this.stick.yaw,
+    )
+    if (this.missionStickGrace <= 0 && stickMagnitude > 0.15) {
+      this.pauseMission('检测到摇杆操作')
+      return
+    }
+    // 航点任务依赖 GNSS:飞着飞着丢了定位,真机会把任务挂起(而不是蒙着眼继续飞)
+    if (this.positionSource === 'atti') {
+      this.pauseMission('GNSS 失锁,进入姿态模式')
+      return
+    }
+    this.missionElapsed += delta
+
+    const waypoint = this.mission[this.missionIndex]
+    if (!waypoint) {
+      this.finishMission()
+      return
+    }
+
+    // 首航点走「启航四步」(垂直 → 水平 → 收高度 → 对准航线),和常规航点推进分开写
+    if (isMissionDepartStage(this.missionStage)) {
+      this.updateMissionDepart(delta)
+      return
+    }
+
+    const spec = this.modeSpec
+    const dx = waypoint.x - this.position.x
+    const dz = waypoint.z - this.position.z
+    const distance = Math.hypot(dx, dz)
+    const altitudeError = waypoint.altitude - this.position.y
+    const curved = this.missionConfig.pathMode === 'curved'
+
+    if (this.missionStage === 'hover') {
+      this.position.y = waypoint.altitude
+      this.velocity.x = lerp(this.velocity.x, 0, Math.min(1, delta * 4))
+      this.velocity.z = lerp(this.velocity.z, 0, Math.min(1, delta * 4))
+      this.velocity.y = lerp(this.velocity.y, 0, Math.min(1, delta * 2))
+      this.missionHoverTimer += delta
+      if (this.missionHoverTimer >= waypoint.hoverSeconds) this.advanceMission()
+      if (this.phase !== 'waypoint') return
+      this.integratePosition(delta)
+      return
+    }
+
+    // 机头:auto = 始终指向下一航点;fixed = 保持任务起始航向(相当于常说的"锁定航向")
+    const targetHeading = distance > 0.4 ? radToDeg(Math.atan2(dx, -dz)) : this.heading
+    const desiredHeading =
+      this.missionConfig.headingMode === 'auto' ? targetHeading : this.missionStartHeading
+    this.heading = this.turnToward(this.heading, desiredHeading, MISSION_YAW_RATE_DEG * delta)
+    const headingError = Math.abs(((desiredHeading - this.heading + 540) % 360) - 180)
+
+    // 高度与水平段同时收敛
+    const desiredVertical = clamp(altitudeError, -spec.descendSpeed, spec.climbSpeed)
+    this.velocity.y = lerp(this.velocity.y, desiredVertical, Math.min(1, delta * 2))
+
+    const cruise = clamp(
+      waypoint.speed > 0 ? waypoint.speed : this.missionConfig.autoSpeed,
+      0.5,
+      Math.max(0.5, this.missionConfig.autoSpeed),
+    )
+    const aligned =
+      this.missionConfig.headingMode !== 'auto' || headingError <= RTH_ALIGN_TOLERANCE_DEG
+    const brakeDistance = (cruise * cruise) / (2 * spec.brakeAccel) + 0.6
+    let targetSpeed = 0
+    if (aligned) {
+      targetSpeed =
+        !curved && distance < brakeDistance
+          ? Math.max(0.6, cruise * (distance / brakeDistance))
+          : cruise
+    }
+    const dirX = distance > 0.001 ? dx / distance : 0
+    const dirZ = distance > 0.001 ? dz / distance : 0
+    const steer = Math.min(1, delta * (curved ? 2.6 : 1.8))
+    this.velocity.x = lerp(this.velocity.x, dirX * targetSpeed, steer)
+    this.velocity.z = lerp(this.velocity.z, dirZ * targetSpeed, steer)
+
+    const arrived = curved
+      ? distance <= MISSION_CURVED_TURN_RADIUS
+      : distance <= MISSION_ARRIVE_RADIUS &&
+        Math.abs(altitudeError) <= MISSION_ARRIVE_ALTITUDE_TOLERANCE
+
+    if (arrived) {
+      this.arriveWaypoint()
+      if (this.phase !== 'waypoint') return
+      this.integratePosition(delta)
+      return
+    }
+
+    this.missionWaypointTimer += delta
+    if (this.missionWaypointTimer > MISSION_WAYPOINT_TIMEOUT) {
+      this.pushEvent('warn', `航点 ${this.missionIndex + 1} 长时间未到达,已跳过`)
+      this.advanceMission()
+      if (this.phase !== 'waypoint') return
+    }
+    this.integratePosition(delta)
+  }
+
+  /**
+   * 启航段:飞往首航点的四步分段机动(与智能返航同款的分段逻辑)。
+   *
+   * 1. `depart-climb`  垂直调整到首航点高度 —— 这一段**只动高度**,水平速度锁死;
+   * 2. `depart-cruise` 保持该高度水平飞向首航点,机头朝行进方向;
+   * 3. `depart-settle` 到达后把高度收干净(水平位置锁死);
+   * 4. `depart-align`  原地把机头转到与航线一致,然后才交回常规航点推进。
+   */
+  private updateMissionDepart(delta: number): void {
+    const waypoint = this.mission[0]
+    if (!waypoint) {
+      this.finishMission()
+      return
+    }
+    const spec = this.modeSpec
+    const dx = waypoint.x - this.position.x
+    const dz = waypoint.z - this.position.z
+    const distance = Math.hypot(dx, dz)
+    const altitudeError = waypoint.altitude - this.position.y
+
+    this.missionWaypointTimer += delta
+    if (this.missionWaypointTimer > MISSION_WAYPOINT_TIMEOUT) {
+      this.pushEvent('warn', '首航点长时间未到达,跳过启航段直接执行航线')
+      this.missionWaypointTimer = 0
+      this.missionStage = 'goto'
+      this.integratePosition(delta)
+      return
+    }
+
+    if (this.missionStage === 'depart-climb') {
+      // 垂直段:水平速度归零,只把高度送到首航点高度
+      this.velocity.x = lerp(this.velocity.x, 0, Math.min(1, delta * 3))
+      this.velocity.z = lerp(this.velocity.z, 0, Math.min(1, delta * 3))
+      this.velocity.y = clamp(altitudeError, -spec.descendSpeed, spec.climbSpeed)
+      if (Math.abs(altitudeError) <= MISSION_DEPART_ALTITUDE_TOLERANCE) {
+        this.position.y = waypoint.altitude
+        this.velocity.y = 0
+        this.missionStage = 'depart-cruise'
+        this.pushEvent(
+          'info',
+          `已垂直调整到 ${waypoint.altitude} 米(首航点高度),水平飞向航点 1`,
+        )
+      }
+      this.integratePosition(delta)
+      return
+    }
+
+    if (this.missionStage === 'depart-cruise') {
+      // 水平段:高度锁在首航点高度,机头朝行进方向(auto 航向模式)
+      this.velocity.y = clamp(altitudeError, -spec.descendSpeed, spec.climbSpeed)
+      const cruise = clamp(
+        waypoint.speed > 0 ? waypoint.speed : this.missionConfig.autoSpeed,
+        0.5,
+        Math.max(0.5, this.missionConfig.autoSpeed),
+      )
+      const brakeDistance = (cruise * cruise) / (2 * spec.brakeAccel) + 0.6
+      const targetSpeed =
+        distance < brakeDistance ? Math.max(0.4, cruise * (distance / brakeDistance)) : cruise
+      const dirX = distance > 0.001 ? dx / distance : 0
+      const dirZ = distance > 0.001 ? dz / distance : 0
+      const desiredHeading =
+        this.missionConfig.headingMode === 'auto' && distance > 0.4
+          ? radToDeg(Math.atan2(dx, -dz))
+          : this.missionStartHeading
+      this.heading = this.turnToward(this.heading, desiredHeading, MISSION_YAW_RATE_DEG * delta)
+      const steer = Math.min(1, delta * 2.2)
+      this.velocity.x = lerp(this.velocity.x, dirX * targetSpeed, steer)
+      this.velocity.z = lerp(this.velocity.z, dirZ * targetSpeed, steer)
+      if (distance <= MISSION_DEPART_ARRIVE_RADIUS) {
+        this.velocity.x = 0
+        this.velocity.z = 0
+        this.missionStage = 'depart-settle'
+      }
+      this.integratePosition(delta)
+      return
+    }
+
+    // 收尾与对准:水平位置已锁死,只动高度 / 只转身
+    this.velocity.x = 0
+    this.velocity.z = 0
+    if (this.missionStage === 'depart-settle') {
+      this.velocity.y = clamp(altitudeError, -spec.descendSpeed, spec.climbSpeed)
+      if (Math.abs(altitudeError) <= MISSION_DEPART_SETTLE_TOLERANCE) {
+        this.position.y = waypoint.altitude
+        this.velocity.y = 0
+        this.missionStage = 'depart-align'
+      }
+      this.integratePosition(delta)
+      return
+    }
+
+    this.velocity.y = lerp(this.velocity.y, 0, Math.min(1, delta * 4))
+    const routeHeading = this.missionRouteHeading(0)
+    const desiredHeading =
+      this.missionConfig.headingMode === 'auto' ? routeHeading : this.missionStartHeading
+    this.heading = this.turnToward(this.heading, desiredHeading, MISSION_YAW_RATE_DEG * delta)
+    const headingError = Math.abs(((desiredHeading - this.heading + 540) % 360) - 180)
+    if (headingError <= MISSION_DEPART_ALIGN_TOLERANCE) {
+      this.position.x = waypoint.x
+      this.position.z = waypoint.z
+      this.position.y = waypoint.altitude
+      this.velocity = { x: 0, y: 0, z: 0 }
+      this.missionStage = 'goto'
+      this.missionWaypointTimer = 0
+      this.pushEvent('success', `机头已对准航线方向(${desiredHeading.toFixed(0)}°),开始执行航线`)
+      this.arriveWaypoint()
+    }
+    this.integratePosition(delta)
+  }
+
+  /**
+   * 暂停后按当前位置反推启航段走到了哪一步(幂等,可反复调用)。
+   * 判定顺序与启航四步一致:高度不对 → 先垂直;水平没到 → 再水平;高度没干净 → 收高度;否则对准。
+   */
+  private resolveMissionDepartStage(): MissionStage {
+    const waypoint = this.mission[0]
+    if (!waypoint) return 'goto'
+    const distance = Math.hypot(waypoint.x - this.position.x, waypoint.z - this.position.z)
+    const altitudeError = Math.abs(waypoint.altitude - this.position.y)
+    if (altitudeError > MISSION_DEPART_ALTITUDE_TOLERANCE) return 'depart-climb'
+    if (distance > MISSION_ARRIVE_RADIUS) return 'depart-cruise'
+    if (altitudeError > MISSION_DEPART_SETTLE_TOLERANCE) return 'depart-settle'
+    return 'depart-align'
+  }
+
+  /**
+   * 航线在某个航点处的「出航方向」(罗盘角)。
+   * 取该航点 → 下一个航点的方位;末航点没有出航段,退回上一段的方向(末点保持入航向)。
+   */
+  private missionRouteHeading(index: number): number {
+    const current = this.mission[index]
+    if (!current) return this.heading
+    const next = this.mission[index + 1]
+    if (next) return this.bearingBetween(current, next)
+    const previous = this.mission[index - 1]
+    if (previous) return this.bearingBetween(previous, current)
+    return this.bearingBetween({ x: this.home.x, z: this.home.z }, current)
+  }
+
+  private bearingBetween(from: { x: number; z: number }, to: { x: number; z: number }): number {
+    const dx = to.x - from.x
+    const dz = to.z - from.z
+    if (Math.hypot(dx, dz) < 0.01) return this.heading
+    return radToDeg(Math.atan2(dx, -dz))
+  }
+
+  /** 到点:执行航点动作(云台 / 拍照 / 悬停),然后飞下一个点 */
+  private arriveWaypoint(): void {
+    const waypoint = this.mission[this.missionIndex]
+    if (!waypoint) return
+    const label = `航点 ${this.missionIndex + 1}/${this.mission.length}`
+    this.missionWaypointTimer = 0
+    if (waypoint.gimbalPitch !== null) this.setGimbalPitch(waypoint.gimbalPitch)
+    if (waypoint.action === 'photo') this.takePhoto()
+
+    // 曲线过点不减速,也就没有"停下来悬停"这回事
+    const canHover =
+      this.missionConfig.pathMode !== 'curved' && waypoint.hoverSeconds > 0
+    const extras: string[] = []
+    if (waypoint.gimbalPitch !== null) extras.push(`云台俯仰 ${waypoint.gimbalPitch}°`)
+    if (canHover) extras.push(`悬停 ${waypoint.hoverSeconds} 秒`)
+    this.pushEvent(
+      'success',
+      `到达${label}${extras.length ? ` · 执行:${extras.join(' · ')}` : ''}`,
+    )
+
+    if (!canHover) {
+      this.advanceMission()
+      return
+    }
+    this.missionStage = 'hover'
+    this.missionHoverTimer = 0
+    this.position.y = waypoint.altitude
+    this.velocity = { x: 0, y: 0, z: 0 }
+  }
+
+  /** 推进到下一个航点;已到末尾则按结束动作收尾或循环 */
+  private advanceMission(): void {
+    this.missionStage = 'goto'
+    this.missionHoverTimer = 0
+    this.missionWaypointTimer = 0
+    const next = this.missionIndex + 1
+    if (next < this.mission.length) {
+      this.missionIndex = next
+      return
+    }
+    if (this.missionConfig.loop) {
+      this.missionIndex = 0
+      this.missionPasses += 1
+      this.pushEvent('info', `航线完成第 ${this.missionPasses} 圈,循环执行`)
+      return
+    }
+    this.finishMission()
+  }
+
+  /** 全部航点执行完毕:按配置悬停 / 返航 / 降落 */
+  private finishMission(): void {
+    const count = this.mission.length
+    const passes = this.missionPasses + 1
+    const elapsed = this.missionElapsed
+    this.missionStatus = 'idle'
+    this.missionIndex = -1
+    this.missionStage = 'idle'
+    this.missionHoverTimer = 0
+    this.missionWaypointTimer = 0
+    this.missionPauseReason = ''
+    this.pushEvent(
+      'success',
+      `航线任务完成(共 ${count} 个航点 · ${passes} 圈 · 用时 ${this.formatDuration(elapsed)})`,
+    )
+    switch (this.missionConfig.finishAction) {
+      case 'rth':
+        this.startRth('航线任务完成')
+        break
+      case 'land':
+        this.startLanding()
+        break
+      default:
+        this.phase = 'flying'
+        this.velocity = { x: 0, y: 0, z: 0 }
+        break
+    }
+  }
+
+  /**
+   * 航线是否处于"已下发、等待起飞到位"状态。
+   * 地面点「执行航线」时 missionStatus 仍是 idle,真正的执行要等自动起飞到 1.2 米 ——
+   * 这段时间里航点列表同样不许改(改了下发的还是旧航线),所以外部需要这个判据。
+   */
+  get missionPendingStart(): boolean {
+    return this.missionPending
+  }
+
+  /** 剩余航程(米):沿剩余航点折线累计,含高度差 */
+  get missionDistanceLeft(): number {    if (this.missionStatus === 'idle' || this.missionIndex < 0) return 0
+    return this.computeMissionDistanceLeft()
+  }
+
+  private computeMissionDistanceLeft(): number {
+    let total = 0
+    let previousX = this.position.x
+    let previousY = this.position.y
+    let previousZ = this.position.z
+    for (let index = Math.max(0, this.missionIndex); index < this.mission.length; index += 1) {
+      const waypoint = this.mission[index]
+      if (!waypoint) continue
+      total += Math.hypot(
+        waypoint.x - previousX,
+        waypoint.z - previousZ,
+        waypoint.altitude - previousY,
+      )
+      previousX = waypoint.x
+      previousY = waypoint.altitude
+      previousZ = waypoint.z
+    }
+    return total
+  }
+
+  /** 航点完成度 0~1(按航程折算,暂停期间保持不变) */
+  get missionProgress(): number {
+    if (this.missionStatus === 'idle' || this.missionTotalDistance <= 0) return 0
+    const done = 1 - this.computeMissionDistanceLeft() / this.missionTotalDistance
+    return clamp(done, 0, 1)
+  }
+
+  /** 预计剩余时间(秒):剩余航程 / 巡航速度 + 剩余悬停时间 */
+  get missionEtaSeconds(): number {
+    if (this.missionStatus === 'idle' || this.missionIndex < 0) return 0
+    const speed = Math.max(0.5, this.missionConfig.autoSpeed)
+    let hover = 0
+    for (let index = this.missionIndex; index < this.mission.length; index += 1) {
+      const waypoint = this.mission[index]
+      if (waypoint) hover += waypoint.hoverSeconds
+    }
+    return this.missionDistanceLeft / speed + hover
   }
 
   // ————————————————————————————— GNSS / 视觉定位 —————————————————————————————
@@ -1026,7 +1944,6 @@ export class DroneSim {
     const targetTemp = this.airborne ? 28 + loadHeat * 22 : 24 + loadHeat * 6
     this.batteryTemp = lerp(this.batteryTemp, targetTemp, Math.min(1, delta * 0.02))
     if (this.airborne) this.flightTime += delta
-    if (this.recording) this.recordSeconds += delta
   }
 
   get lowBattery(): boolean {
@@ -1187,19 +2104,28 @@ export class DroneSim {
   }
 
   toggleRecording(): void {
-    if (this.recording) {
-      this.stopRecording()
-    } else {
+    this.setRecordingState(!this.recording)
+  }
+
+  /**
+   * 录像状态的唯一写入口(UI/引擎都走这里):
+   * 只负责状态、计时与事件日志;真正的录制(MediaRecorder)在 drone-fly 层,
+   * 由它按本状态启动/收尾,避免两处状态打架。
+   */
+  setRecordingState(active: boolean): void {
+    if (active === this.recording) return
+    if (active) {
       this.recording = true
       this.recordSeconds = 0
       this.pushEvent('info', '开始录像')
+    } else {
+      this.recording = false
+      this.pushEvent('info', `录像结束,时长 ${this.formatDuration(this.recordSeconds)}`)
     }
   }
 
   stopRecording(): void {
-    if (!this.recording) return
-    this.recording = false
-    this.pushEvent('info', `录像结束,时长 ${this.formatDuration(this.recordSeconds)}`)
+    this.setRecordingState(false)
   }
 
   takePhoto(): void {
@@ -1359,7 +2285,7 @@ export class DroneSim {
   snapshot(): DroneSnapshot {
     return {
       phase: this.phase,
-      phaseLabel: PHASE_LABELS[this.phase],
+      phaseLabel: this.phaseLabel,
       mode: this.mode,
       modeLabel: this.modeSpec.label,
       positionSource: this.positionSource,
@@ -1407,6 +2333,7 @@ export class DroneSim {
       criticalBattery: this.criticalBattery,
       lowBatteryCountdown: this.lowBatteryCountdown,
       rthStage: this.phase === 'rth' ? this.rthStage : '',
+      landingStage: this.phase === 'landing' ? this.landingStage : '',
       rthReason: this.rthReason,
       warnings: this.warnings,
       events: this.events.slice(0, 12),
@@ -1416,6 +2343,25 @@ export class DroneSim {
       recordSeconds: this.recordSeconds,
       photoCount: this.photoCount,
       cameraZoom: this.cameraZoom,
+      mission: {
+        status: this.missionStatus,
+        statusLabel: MISSION_STATUS_LABELS[this.missionStatus],
+        stage: this.missionStage,
+        stageLabel: MISSION_STAGE_LABELS[this.missionStage],
+        index: this.missionIndex,
+        total: this.mission.length,
+        passes: this.missionPasses,
+        elapsed: this.missionElapsed,
+        distanceLeft: this.missionDistanceLeft,
+        progress: this.missionProgress,
+        etaSeconds: this.missionEtaSeconds,
+        pauseReason: this.missionPauseReason,
+        active: this.mission[this.missionIndex]
+          ? { ...(this.mission[this.missionIndex] as MissionWaypoint) }
+          : null,
+        waypoints: this.mission.map((waypoint) => ({ ...waypoint })),
+        config: { ...this.missionConfig },
+      },
     }
   }
 

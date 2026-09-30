@@ -7,7 +7,9 @@ import * as THREE from 'three'
  * - 桨叶:CTRL_Prop_<位置>_Spin 绕自身局部 Y 轴自转(导出到 Three.js 后 Blender 的局部 Z 即局部 Y),
  *   对角两个电机同向。桨叶桨距已由模型出厂烘进几何(实测 ~15°,与自转方向配对),
  *   这里不做任何几何补烘,尊重出厂状态。
- * - 机臂:CTRL_Arm_<位置>_Fold,折叠轴是机体竖轴;折叠角度不是猜的,而是载入时用
+ * - 机臂:骨骼化导出驱动 ARM_<位置>_Fold_Bone(旧模型退回 CTRL_Arm_<位置>_Fold)。
+ *   折叠 = 绕机体竖轴(父系 +Y)的旋转,前乘在出厂装配四元数上——骨节自带
+ *   烘焙旋转,直接改 Euler 会把折叠轴带偏。折叠角度不是猜的,而是载入时用
  *   "铰链 → 桨心"向量与该机臂应有的收纳方向(前臂朝机尾、后臂朝机头)算出来的。
  * - 云台:CTRL_Gimbal_Yaw / Pitch / Roll 三轴。真机云台是增稳平台,
  *   所以这里做反向补偿:机体倾斜多少,云台就往回摆多少(超出机械行程才让画面跟着歪)。
@@ -75,6 +77,10 @@ interface PropUnit {
   /** 出厂装配姿态(自转控制器的静态装配倾角,电机轴方向) */
   bindQuaternion: THREE.Quaternion
   blades: BladeUnit[]
+  /** 桨叶折叠旋转轴:电机轴在桨叶父系中的方向(骨骼化=折叠骨节;旧模型=ROTOR 局部 Y) */
+  bladeFoldAxis: THREE.Vector3
+  spinners: SpinUnit[]
+  lifts: LiftUnit[]
   /**
    * 收纳抬升量(米,几何实测):叠拢后桨叶与机身的最大侵入 + 余量。
    * 折叠时转子沿电机轴抬起这么多,模拟真机"桨叶架在机身上"的收纳效果。
@@ -87,15 +93,38 @@ interface PropUnit {
 interface ArmUnit {
   position: ArmPosition
   node: THREE.Object3D
+  /** 出厂装配姿态四元数:骨骼化导出时骨节/控制节点自带烘焙旋转,必须整体保留 */
+  bindQuaternion: THREE.Quaternion
   /** 收纳方向对应的旋转角(弧度),折叠度 1 时施加 */
   foldAngle: number
+}
+
+/** 自转件:绕电机轴(父系表示)驱动的节点(自转节点本体 + 骨骼化的桨叶折叠骨节) */
+interface SpinUnit {
+  node: THREE.Object3D
+  bindQuaternion: THREE.Quaternion
+  /** 电机轴在该节点父系中的方向(单位向量) */
+  axisParent: THREE.Vector3
+}
+
+/** 收纳抬升件:沿电机轴平移的节点(自转节点 + 桨叶骨节;钟罩留在原地) */
+interface LiftUnit {
+  node: THREE.Object3D
+  bindPosition: THREE.Vector3
+  axisParent: THREE.Vector3
+  /** 该节点局部系 1 单位 = 多少米(GLB 内部坐标可能带缩放) */
+  localUnits: number
 }
 
 /** 自转四元数复用对象(避免每帧分配) */
 const spinQuat = new THREE.Quaternion()
 const foldQuat = new THREE.Quaternion()
-const liftAxis = new THREE.Vector3()
+const gimbalQuat = new THREE.Quaternion()
+const gimbalQuatB = new THREE.Quaternion()
+const gimbalVec = new THREE.Vector3()
 const UP_AXIS = new THREE.Vector3(0, 1, 0)
+const X_AXIS = new THREE.Vector3(1, 0, 0)
+const Z_AXIS = new THREE.Vector3(0, 0, 1)
 
 /** 高度场网格间距(米)与键值 */
 const HEIGHTFIELD_CELL = 0.01
@@ -187,11 +216,22 @@ export class DroneRig {
   readonly model: THREE.Group
   readonly parts: RigPartReport[] = []
   private readonly root: THREE.Object3D | null
+  /**
+   * 骨骼架根节点(RIG_DJI_Arms_Props)。重导出的模型把机臂/电机/桨叶/脚撑
+   * 挂到了这个与 CTRL_DJI_Root 平级的顶级骨架下(为骨骼动画导出),
+   * 刚体俯仰/横滚必须同时施加在两个节点上,否则飞行时机体会"散架"。
+   * 旧模型(无骨骼)此值为 null,自动退回单节点模式。
+   */
+  private readonly rigBonesRoot: THREE.Object3D | null
   private readonly props: PropUnit[] = []
   private readonly arms: ArmUnit[] = []
   private gimbalYaw: THREE.Object3D | null = null
   private gimbalPitch: THREE.Object3D | null = null
   private gimbalRoll: THREE.Object3D | null = null
+  /** 云台偏航节点出厂位置(枢轴 P,父系局部单位) */
+  private readonly gimbalBindPosition = new THREE.Vector3()
+  /** 相机中心 C − 枢轴 P(父系局部单位);C≈P 时为零向量,补偿自动无效 */
+  private readonly gimbalCenterOffset = new THREE.Vector3()
   private readonly disposables: Array<THREE.BufferGeometry | THREE.Material> = []
   private fold = 0
   private spinAngle = 0
@@ -212,6 +252,7 @@ export class DroneRig {
     this.model = model
     model.updateMatrixWorld(true)
     this.root = model.getObjectByName('CTRL_DJI_Root') ?? null
+    this.rigBonesRoot = model.getObjectByName('RIG_DJI_Arms_Props') ?? null
     this.collectParts()
     this.buildProps()
     this.buildArms()
@@ -240,8 +281,19 @@ export class DroneRig {
     if (Math.abs(next - this.fold) < 1e-4) return
     this.fold = next
     this.arms.forEach((arm) => {
-      arm.node.rotation.y = arm.foldAngle * next
+      this.applyArmFold(arm, next)
     })
+  }
+
+  /**
+   * 机臂折叠的唯一写入口:绕机体竖轴(父系 +Y)旋转,前乘在出厂装配四元数上。
+   * 旧模型折叠节点出厂四元数为单位阵,等价于直接写 rotation.y;骨骼化重导出后
+   * 折叠骨节自带烘焙旋转,直接改 Euler 的 y 分量会把折叠轴带偏(实测偏 32°,
+   * 机臂甩出水平面),必须四元数整体前乘。
+   */
+  private applyArmFold(arm: ArmUnit, factor: number): void {
+    foldQuat.setFromAxisAngle(UP_AXIS, arm.foldAngle * factor)
+    arm.node.quaternion.copy(foldQuat).multiply(arm.bindQuaternion)
   }
 
   /**
@@ -262,34 +314,42 @@ export class DroneRig {
     const liftFactor = smoothstep01(this.fold)
     for (const prop of this.props) {
       this.applyBladeFold(prop, stackFactor)
-      // 转子(含桨毂)沿电机轴抬起:位置在机臂系,电机轴 = 出厂姿态 × 局部 Y;
-      // foldLift 是米,换算成节点局部单位(GLB 内部坐标可能带 10 倍缩放)
-      liftAxis.set(0, 1, 0).applyQuaternion(prop.bindQuaternion)
-      prop.node.position
-        .copy(prop.bindPosition)
-        .addScaledVector(liftAxis, prop.foldLift * prop.localUnits * liftFactor)
+      // 收纳抬升:转子(自转节点+桨叶骨节)沿电机轴抬起,钟罩(已挂在
+      // 自转节点父级)留在原地。foldLift 是米,换算成节点局部单位。
+      for (const lift of prop.lifts) {
+        lift.node.position
+          .copy(lift.bindPosition)
+          .addScaledVector(lift.axisParent, prop.foldLift * lift.localUnits * liftFactor)
+      }
     }
   }
 
-  /** 叠拢/张开姿态:绕电机轴(自转局部 Y,即桨叶父系 ROTOR 的 Y)偏航 stackYaw×factor */
+  /** 叠拢/张开姿态:绕电机轴(桨叶父系表示的 bladeFoldAxis)偏航 stackYaw×factor */
   private applyBladeFold(prop: PropUnit, factor: number): void {
     for (const [index, blade] of prop.blades.entries()) {
-      foldQuat.setFromAxisAngle(UP_AXIS, blade.stackYaw * factor)
+      foldQuat.setFromAxisAngle(prop.bladeFoldAxis, blade.stackYaw * factor)
       blade.mesh.position.copy(blade.bindPosition).applyQuaternion(foldQuat)
       blade.mesh.quaternion.copy(foldQuat).multiply(blade.bindQuaternion)
       // 两片桨叶叠拢时沿电机轴错开一点层差,像真机桨夹上下叠放
-      if (index === 1) blade.mesh.position.addScaledVector(UP_AXIS, 0.012 * prop.localUnits * factor)
+      if (index === 1) {
+        blade.mesh.position.addScaledVector(prop.bladeFoldAxis, 0.012 * prop.localUnits * factor)
+      }
     }
   }
 
   /**
-   * 桨叶自转节点姿态的唯一写入口:
-   *   q = 出厂姿态 ⊗ Ry(局部 Y, 自转角)
-   * 自转后乘局部 Y = 绕**电机轴**(出厂校准的枢轴)旋转,与钟罩/安装面同轴。
+   * 自转姿态的唯一写入口:对每个自转件前乘"绕父系表示的电机轴"的旋转:
+   *   q = Q(axisParent, angle) ⊗ 出厂姿态
+   * 与旧版"后乘局部 Y"在世界系完全等价(同一根电机轴、同向、同角)。
+   * 自转节点本体带动桨毂;骨骼化导出还把两片桨叶挂进独立折叠骨节
+   * (PROP_*_Blade_*_Fold_Bone,与自转节点同级),必须一并驱动,
+   * 否则桨毂转而桨叶不转。
    */
   private applyPropRotation(prop: PropUnit): void {
-    spinQuat.setFromAxisAngle(UP_AXIS, prop.angle)
-    prop.node.quaternion.copy(prop.bindQuaternion).multiply(spinQuat)
+    for (const spinner of prop.spinners) {
+      spinQuat.setFromAxisAngle(spinner.axisParent, prop.angle)
+      spinner.node.quaternion.copy(spinQuat).multiply(spinner.bindQuaternion)
+    }
   }
 
   /** 驱动桨叶:load 为电机负荷 0~1 */
@@ -324,9 +384,16 @@ export class DroneRig {
       pose.z,
     )
     this.model.rotation.y = -degToRad(pose.headingDeg)
+    const pitchRad = degToRad(pose.pitchDeg + this.stancePitchOpen * openFactor)
+    const rollRad = -degToRad(pose.rollDeg)
     if (this.root) {
-      this.root.rotation.x = degToRad(pose.pitchDeg + this.stancePitchOpen * openFactor)
-      this.root.rotation.z = -degToRad(pose.rollDeg)
+      this.root.rotation.x = pitchRad
+      this.root.rotation.z = rollRad
+    }
+    // 骨骼架根与机身保持同一刚体姿态(重导出后机臂/桨叶/脚撑挂在 RIG 下,与机身平级)
+    if (this.rigBonesRoot) {
+      this.rigBonesRoot.rotation.x = pitchRad
+      this.rigBonesRoot.rotation.z = rollRad
     }
   }
 
@@ -336,16 +403,25 @@ export class DroneRig {
    */
   setGimbalAttitude(pitchDeg: number, rollDeg: number, yawDeg: number, bodyPitch: number, bodyRoll: number): void {
     const totalPitch = bodyPitch + this.stancePitchOpen * (1 - this.fold)
-    if (this.gimbalPitch) {
-      this.gimbalPitch.rotation.x = degToRad(
-        clamp(pitchDeg - totalPitch, GIMBAL_LIMITS.pitchMin, GIMBAL_LIMITS.pitchMax),
-      )
-    }
-    if (this.gimbalRoll) {
-      this.gimbalRoll.rotation.z = degToRad(clamp(-(rollDeg - bodyRoll), -GIMBAL_LIMITS.rollLimit, GIMBAL_LIMITS.rollLimit))
-    }
-    if (this.gimbalYaw) {
-      this.gimbalYaw.rotation.y = degToRad(clamp(yawDeg, -GIMBAL_LIMITS.yawLimit, GIMBAL_LIMITS.yawLimit))
+    const yawRad = degToRad(clamp(yawDeg, -GIMBAL_LIMITS.yawLimit, GIMBAL_LIMITS.yawLimit))
+    const pitchRad = degToRad(
+      clamp(pitchDeg - totalPitch, GIMBAL_LIMITS.pitchMin, GIMBAL_LIMITS.pitchMax),
+    )
+    const rollRad = degToRad(clamp(-(rollDeg - bodyRoll), -GIMBAL_LIMITS.rollLimit, GIMBAL_LIMITS.rollLimit))
+    if (this.gimbalPitch) this.gimbalPitch.rotation.x = pitchRad
+    if (this.gimbalRoll) this.gimbalRoll.rotation.z = rollRad
+    if (this.gimbalYaw) this.gimbalYaw.rotation.y = yawRad
+    // 旋转中心补偿:骨骼化导出把云台枢轴链放在鼻尖安装位、网格用反向平移
+    // 补偿回原位 —— 静止正确,但打杆时相机会绕枢轴甩弧线(俯仰 -90° 时壳心
+    // 被甩到安装座上方 ~13cm,视觉上"悬空")。在偏航节点(链的最外层,其
+    // 平移在旋转之外)加 Δ = (I−R)·(C−P),等价于把旋转中心从枢轴 P 搬到
+    // 相机中心 C:相机原地转动。C≈P 时(老模型/枢轴放得准)Δ≈0 自动无效。
+    if (this.gimbalYaw && this.gimbalCenterOffset.lengthSq() > 1e-10) {
+      gimbalQuat.setFromAxisAngle(UP_AXIS, yawRad)
+      gimbalQuat.multiply(gimbalQuatB.setFromAxisAngle(X_AXIS, pitchRad))
+      gimbalQuat.multiply(gimbalQuatB.setFromAxisAngle(Z_AXIS, rollRad))
+      gimbalVec.copy(this.gimbalCenterOffset).applyQuaternion(gimbalQuat)
+      this.gimbalYaw.position.copy(this.gimbalBindPosition).add(this.gimbalCenterOffset).sub(gimbalVec)
     }
   }
 
@@ -445,6 +521,7 @@ export class DroneRig {
   }
 
   private buildProps(): void {
+    this.model.updateMatrixWorld(true)
     for (const position of ARM_POSITIONS) {
       const node = this.model.getObjectByName(`CTRL_Prop_${position}_Spin`)
       if (!node) continue
@@ -454,12 +531,15 @@ export class DroneRig {
       // Spin 子树,getObjectByName 找不到会自动跳过,无副作用。
       const bell = node.getObjectByName(`MOTOR_${position}_RotorBell`)
       if (bell && node.parent) {
-        this.model.updateMatrixWorld(true)
         node.parent.attach(bell)
+        this.model.updateMatrixWorld(true)
       }
       // 出厂几何已自洽(实测):ROTOR 桨毂与钟罩的几何轴和自转节点局部 Y
       // 同轴(偏差 <1.5°),桨叶自带 ~15° 桨距且符号与对角反转约定配对。
       // 因此这里不做任何几何补烘,尊重模型出厂状态。
+      const motorAxisWorld = new THREE.Vector3(0, 1, 0)
+        .applyQuaternion(node.getWorldQuaternion(new THREE.Quaternion()))
+        .normalize()
       const blades: BladeUnit[] = []
       for (const index of [1, 2]) {
         const mesh = this.model.getObjectByName(`PROP_${position}_Blade_${index}`) as THREE.Mesh | null
@@ -472,6 +552,45 @@ export class DroneRig {
           })
         }
       }
+      // 电机轴 → 各父系表示:骨骼化重导出后自转节点/桨叶折叠骨节的父系各不相同
+      // (旧模型里桨叶父系=ROTOR,局部 Y 即电机轴),一律按世界几何反推。
+      const axisIn = (frame: THREE.Object3D | null): THREE.Vector3 => {
+        const inverse = (frame ?? this.model).getWorldQuaternion(new THREE.Quaternion()).invert()
+        return motorAxisWorld.clone().applyQuaternion(inverse).normalize()
+      }
+      // 自转件:自转节点(带动桨毂;钟罩已摘出)。骨骼化导出还把两片桨叶
+      // 挂进独立的折叠骨节(PROP_*_Blade_*_Fold_Bone,与自转节点同级),
+      // 必须一并驱动,否则桨毂转而桨叶不转。
+      const spinners: SpinUnit[] = []
+      const addSpinner = (object: THREE.Object3D): void => {
+        spinners.push({
+          node: object,
+          bindQuaternion: object.quaternion.clone(),
+          axisParent: axisIn(object.parent),
+        })
+      }
+      addSpinner(node)
+      for (const index of [1, 2]) {
+        const bone = this.model.getObjectByName(`PROP_${position}_Blade_${index}_Fold_Bone`)
+        if (bone) addSpinner(bone)
+      }
+      // 桨叶折叠轴:电机轴在桨叶父系(骨骼化=折叠骨节;旧模型=ROTOR)的表示
+      const bladeParent = blades[0]?.mesh.parent ?? node
+      const bladeFoldAxis = axisIn(bladeParent)
+      // 收纳抬升件:自转节点 + 桨叶折叠骨节(钟罩留在原地不抬)
+      const lifts: LiftUnit[] = []
+      const addLift = (object: THREE.Object3D): void => {
+        lifts.push({
+          node: object,
+          bindPosition: object.position.clone(),
+          axisParent: axisIn(object.parent),
+          localUnits: 1 / object.matrixWorld.getMaxScaleOnAxis(),
+        })
+      }
+      addLift(node)
+      spinners.forEach((spinner) => {
+        if (spinner.node !== node) addLift(spinner.node)
+      })
       this.props.push({
         position,
         node,
@@ -480,6 +599,9 @@ export class DroneRig {
         angle: 0,
         bindQuaternion: node.quaternion.clone(),
         blades,
+        bladeFoldAxis,
+        spinners,
+        lifts,
         foldLift: 0,
         // 局部系 1 单位 = 多少米(沿节点世界矩阵的缩放求逆)
         localUnits: 1 / node.matrixWorld.getMaxScaleOnAxis(),
@@ -500,7 +622,7 @@ export class DroneRig {
     // 临时折叠机臂 —— ⚠️ 必须先折叠再建高度场:收纳态下机臂/电机扫过机身
     // 两侧上方,展开态建场会漏掉这些表面,桨叶会从折叠臂下方"幽灵穿越"。
     this.arms.forEach((arm) => {
-      arm.node.rotation.y = arm.foldAngle
+      this.applyArmFold(arm, 1)
     })
     this.model.updateMatrixWorld(true)
     // 高度场与侵入量一律在世界系(米)量测,避开 GLB 内部坐标缩放
@@ -515,13 +637,15 @@ export class DroneRig {
       armDirWorld.y = 0
       if (armDirWorld.lengthSq() < 1e-6) continue
       armDirWorld.normalize()
-      // 转到桨叶父系(ROTOR)局部系:施加旋转用的是父系局部 Y(= 电机轴),
-      // 因此对齐角也要在父系里求。注意:本模型 ROTOR 原点即桨毂中心。
+      // 转到桨叶父系局部系:折叠是绕电机轴的旋转,对齐角在父系里求,
+      // 且只比较垂直于电机轴的分量(骨骼化导出后父系局部 Y 不再是电机轴)。
+      // 注意:本模型 ROTOR 原点即桨毂中心。
       const firstBlade = prop.blades[0]
       if (!firstBlade) continue
+      const axis = prop.bladeFoldAxis
       const parentQuat = (firstBlade.mesh.parent ?? prop.node).getWorldQuaternion(new THREE.Quaternion())
       const armDirLocal = armDirWorld.clone().applyQuaternion(parentQuat.clone().invert())
-      armDirLocal.y = 0
+      armDirLocal.addScaledVector(axis, -axis.dot(armDirLocal))
       if (armDirLocal.lengthSq() < 1e-6) continue
       armDirLocal.normalize()
       for (const blade of prop.blades) {
@@ -529,14 +653,12 @@ export class DroneRig {
         const center = new THREE.Box3().setFromObject(blade.mesh).getCenter(new THREE.Vector3())
         const rotorInv = new THREE.Matrix4().copy((blade.mesh.parent ?? prop.node).matrixWorld).invert()
         const radial = center.applyMatrix4(rotorInv)
-        radial.y = 0
+        radial.addScaledVector(axis, -axis.dot(radial))
         if (radial.lengthSq() < 1e-6) continue
         radial.normalize()
-        // 绕 +Y 旋转 θ 使方位角减少 θ,故取 atan2(cross, dot)
-        blade.stackYaw = Math.atan2(
-          radial.z * armDirLocal.x - radial.x * armDirLocal.z,
-          radial.x * armDirLocal.x + radial.z * armDirLocal.z,
-        )
+        // 绕电机轴旋转 θ 使径向对齐机臂方向:θ = atan2(cross(径向,臂向)·轴, 径向·臂向)
+        const cross = new THREE.Vector3().crossVectors(radial, armDirLocal)
+        blade.stackYaw = Math.atan2(cross.dot(axis), radial.dot(armDirLocal))
       }
       // 偏航扫描(整圈):找对机身(含机臂/电机/其他桨叶)侵入最小的整体偏角。
       // 前桨沿机臂方向会被机尾上表面挡住,但向外偏 ~50° 即完全无侵入 ——
@@ -590,7 +712,7 @@ export class DroneRig {
     }
     // 还原展开
     this.arms.forEach((arm) => {
-      arm.node.rotation.y = 0
+      this.applyArmFold(arm, 0)
     })
     this.model.updateMatrixWorld(true)
   }
@@ -667,12 +789,16 @@ export class DroneRig {
   /**
    * 折叠角由几何推算:取"铰链 → 桨心"在水平面的方向,与收纳方向作差。
    * 前臂收向机尾(+Z),后臂收向机头(-Z) —— 与 Mini 系列的实际收纳姿态一致。
+   * 驱动点优先取骨骼化导出的折叠骨节 ARM_*_Fold_Bone(其子树 = 折叠子树:
+   * 臂网格 + 电机 + 桨),旧模型退回 CTRL_Arm_*_Fold。
    */
   private buildArms(): void {
     const hingeWorld = new THREE.Vector3()
     const propWorld = new THREE.Vector3()
     for (const position of ARM_POSITIONS) {
-      const node = this.model.getObjectByName(`CTRL_Arm_${position}_Fold`)
+      const node =
+        this.model.getObjectByName(`ARM_${position}_Fold_Bone`) ??
+        this.model.getObjectByName(`CTRL_Arm_${position}_Fold`)
       const prop = this.model.getObjectByName(`CTRL_Prop_${position}_Spin`)
       if (!node || !prop) continue
       node.getWorldPosition(hingeWorld)
@@ -684,7 +810,7 @@ export class DroneRig {
       let foldAngle = current - target
       // 归一到 (-π, π]:取最短路径,避免绕大半圈
       foldAngle = ((foldAngle + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI
-      this.arms.push({ position, node, foldAngle })
+      this.arms.push({ position, node, bindQuaternion: node.quaternion.clone(), foldAngle })
     }
   }
 
@@ -700,25 +826,76 @@ export class DroneRig {
   private computeStanceTrim(): void {
     this.model.updateMatrixWorld(true)
     const toModelLocal = new THREE.Matrix4().copy(this.model.matrixWorld).invert()
+    // 触地带必须在展开姿下量测(出厂默认收纳,脚撑随机臂翻起贴不到地面):
+    // 直接把臂折叠节点转到展开位 → 量测 → 恢复出厂烘焙值。
+    // (不能走 setArmFold:构造期 this.fold=0,会被 early-return 跳过;
+    //  也不能只记 this.fold:出厂姿态烘在节点局部变换里,不走 setArmFold 的状态量。)
+    // computeBladeFold 已在此之前完成(它依赖收纳态)。
+    const savedFoldQ = this.arms.map((arm) => arm.node.quaternion.clone())
+    this.arms.forEach((arm) => {
+      this.applyArmFold(arm, 0)
+    })
+    this.model.updateMatrixWorld(true)
     // —— 展开态 ——
     const contacts = this.scanStanceContacts(toModelLocal)
-    if (contacts.front && contacts.rear) {
+    // 配平角首选"电机轴前倾角均值":设计基准是桨盘水平(停放/悬停时四桨盘接近水平,
+    // 与飞行状态一致)。骨骼化重导出后机臂挂进 RIG 骨架,触地双带解算与该基准
+    // 不再一致(机尾下壳斜面会让解算撞到 ±25° 上限),故只在量不到电机轴时兜底。
+    const motorTilt = this.measureMotorForwardTilt()
+    if (motorTilt !== null) {
+      this.stancePitchOpen = THREE.MathUtils.radToDeg(clamp(motorTilt, -degToRad(25), degToRad(25)))
+    } else if (contacts.front && contacts.rear) {
       const dz = contacts.front.z - contacts.rear.z
       if (Math.abs(dz) > 1e-3) {
         // 旋转任意平行轴不改变"两点同高"的解:tanφ = (y前-y后)/(z前-z后)
         const pitch = clamp(Math.atan((contacts.front.y - contacts.rear.y) / dz), -degToRad(25), degToRad(25))
         this.stancePitchOpen = THREE.MathUtils.radToDeg(pitch)
-        // 施加配平后量触地带的世界最低点 → 静止时的整体下沉量
-        if (this.root) this.root.rotation.x = pitch
-        this.model.updateMatrixWorld(true)
-        this.stanceDropOpen = Math.max(0, this.measureLowest(['GEAR_', 'BODY_']))
-        if (this.root) this.root.rotation.x = 0
-        this.model.updateMatrixWorld(true)
       }
     }
+    if (this.stancePitchOpen !== 0) {
+      // 施加配平后量触地带的世界最低点 → 静止时的整体下沉量。
+      // 注意不可钳到 ≥0:载入基准(normalizeModel)是"收纳态整体最低点贴地",
+      // 新模型展开配平后的脚撑可能比它还低(负值 = 需要整体抬升,否则穿地)。
+      this.setBodyPitchRad(degToRad(this.stancePitchOpen))
+      this.model.updateMatrixWorld(true)
+      this.stanceDropOpen = this.measureLowest(['GEAR_', 'BODY_'])
+      this.setBodyPitchRad(0)
+      this.model.updateMatrixWorld(true)
+    }
+    // 恢复出厂烘焙姿
+    this.arms.forEach((arm, index) => {
+      const q = savedFoldQ[index]
+      if (q) arm.node.quaternion.copy(q)
+    })
+    this.model.updateMatrixWorld(true)
     // —— 收纳态:机身平贴,下沉量 = 机身系最低点相对模型原点的深度
     // (世界系量测;不含脚撑 GEAR_ 与桨叶 PROP_,它们收纳后不接地) ——
     this.stanceDropFolded = Math.max(0, this.model.position.y - this.measureLowest(['BODY_', 'ARM_', 'MOTOR_']))
+  }
+
+  /** 刚体俯仰(弧度)统一写入:机身根 + 骨骼架根(若存在)同步施加 */
+  private setBodyPitchRad(pitchRad: number): void {
+    if (this.root) this.root.rotation.x = pitchRad
+    if (this.rigBonesRoot) this.rigBonesRoot.rotation.x = pitchRad
+  }
+
+  /**
+   * 电机轴前倾角(弧度,展开姿、机身水平时量测):四个转子节点局部 Y(=电机轴)
+   * 的世界方向,取前向分量的均值。调用前须已把机臂展开并 updateMatrixWorld。
+   */
+  private measureMotorForwardTilt(): number | null {
+    if (this.props.length === 0) return null
+    const axis = new THREE.Vector3()
+    let sum = 0
+    let count = 0
+    for (const prop of this.props) {
+      axis.set(0, 1, 0).transformDirection(prop.node.matrixWorld)
+      if (!Number.isFinite(axis.z)) continue
+      // 模型前向为 -z:轴前倾时 axis.z < 0,-axis.z 为正
+      sum += Math.asin(THREE.MathUtils.clamp(-axis.z, -1, 1))
+      count += 1
+    }
+    return count > 0 ? sum / count : null
   }
 
   /** 所有匹配前缀网格的世界最低点;toModelLocal 提供时返回模型系坐标 */
@@ -764,11 +941,35 @@ export class DroneRig {
     this.gimbalYaw = this.model.getObjectByName('CTRL_Gimbal_Yaw') ?? null
     this.gimbalPitch = this.model.getObjectByName('CTRL_Gimbal_Pitch') ?? null
     this.gimbalRoll = this.model.getObjectByName('CTRL_Gimbal_Roll') ?? null
+    // 量"相机中心 C − 枢轴 P":C = 云台载荷网格(GIMBAL_BlackCameraPod 子树)
+    // 包围盒中心,P = 偏航节点出厂位置。骨骼化导出常把枢轴放在安装位而把网格
+    // 平移补偿回原位,导致旋转绕安装位而非相机本身(见 setGimbalAttitude)。
+    if (this.gimbalYaw?.parent) {
+      this.gimbalBindPosition.copy(this.gimbalYaw.position)
+      const pod = this.model.getObjectByName('GIMBAL_BlackCameraPod') ?? this.gimbalRoll
+      if (pod) {
+        const box = new THREE.Box3()
+        let hasMesh = false
+        pod.traverse((object) => {
+          const mesh = object as THREE.Mesh
+          if (!mesh.isMesh || !mesh.geometry) return
+          hasMesh = true
+          box.union(new THREE.Box3().setFromObject(mesh))
+        })
+        if (hasMesh && !box.isEmpty()) {
+          const center = box.getCenter(new THREE.Vector3())
+          this.gimbalYaw.parent.updateWorldMatrix(true, false)
+          const inverse = this.gimbalYaw.parent.matrixWorld.clone().invert()
+          center.applyMatrix4(inverse)
+          this.gimbalCenterOffset.copy(center).sub(this.gimbalBindPosition)
+        }
+      }
+    }
   }
 
   /** 机臂折叠枢轴节点(状态灯等机臂附件挂到它下面即可跟随折叠/展开) */
   getArmFoldNode(position: ArmPosition): THREE.Object3D | null {
-    return this.model.getObjectByName(`CTRL_Arm_${position}_Fold`)
+    return this.model.getObjectByName(`CTRL_Arm_${position}_Fold`) ?? null
   }
 }
 

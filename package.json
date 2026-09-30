@@ -14,6 +14,7 @@
     "test:unit": "vitest",
     "test:e2e": "playwright test",
     "build-only": "vite build",
+    "build:lib": "node scripts/build-lib.mjs",
     "type-check": "vue-tsc --build",
     "lint": "run-s \"lint:*\"",
     "lint:oxlint": "oxlint . --fix",

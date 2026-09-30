@@ -275,6 +275,7 @@ export class DroneRadar {
   constructor(scene: THREE.Scene) {
     for (let index = 0; index < this.sensors.length; index += 1) {
       const sensor = this.sensors[index]
+      if (!sensor) continue
       // slot 0 = 主射线(亮),1~4 = 锥边界(淡)
       for (let slot = 0; slot < 5; slot += 1) {
         const positions = new Float32Array(6)
@@ -388,6 +389,7 @@ export class DroneRadar {
     const hits: Array<RadarHit | null> = []
     for (let index = 0; index < this.sensors.length; index += 1) {
       const sensor = this.sensors[index]
+      if (!sensor) continue
       // —— 起点:玻璃中心(世界系) ——
       if (sensor.mesh) {
         this.origin.copy(sensor.localCenter).applyMatrix4(sensor.mesh.matrixWorld)
@@ -433,11 +435,11 @@ export class DroneRadar {
 
     this.snapshot = {
       detecting: true,
-      left: hits[0],
-      right: hits[1],
+      left: hits[0] ?? null,
+      right: hits[1] ?? null,
       range: FRONT_RANGE,
-      upLeft: hits[2],
-      upRight: hits[3],
+      upLeft: hits[2] ?? null,
+      upRight: hits[3] ?? null,
       upRange: UP_RANGE,
       aim: this.aim,
     }
@@ -456,6 +458,7 @@ export class DroneRadar {
 
     // 主射线
     const main = this.beams[index * 5]
+    if (!main) return
     this.tmp.copy(origin).addScaledVector(axis, length)
     this.writeBeam(main, origin, this.tmp, color)
 
@@ -467,10 +470,13 @@ export class DroneRadar {
       [this.u1, -sensor.halfU2, 0],
     ]
     for (let slot = 0; slot < edges.length; slot += 1) {
-      const [rotAxis, angle] = edges[slot]
+      const edge = edges[slot]
+      const beam = this.beams[index * 5 + 1 + slot]
+      if (!edge || !beam) continue
+      const [rotAxis, angle] = edge
       this.tmp.copy(axis).applyAxisAngle(rotAxis, angle).normalize()
       this.tmp2.copy(origin).addScaledVector(this.tmp, sensor.range)
-      this.writeBeam(this.beams[index * 5 + 1 + slot], origin, this.tmp2, color)
+      this.writeBeam(beam, origin, this.tmp2, color)
     }
   }
 

@@ -100,7 +100,7 @@ await page.evaluate(() => {
   }
 })
 
-check('五个分页面板', (await page.locator('.tabs button').count()) === 5)
+check('六个分页面板', (await page.locator('.tabs button').count()) === 6)
 check('双虚拟摇杆', (await page.locator('.stick-pad').count()) === 2)
 check('姿态仪 + 罗盘', (await page.locator('.attitude').count()) === 2)
 check('HUD 阶段显示', (await page.locator('[data-testid="snap-phase"]').count()) === 1)

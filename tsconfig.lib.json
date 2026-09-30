@@ -1,0 +1,28 @@
+{
+  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  "compilerOptions": {
+    // 只产声明文件，JS 交给 vite.lib.config.ts（ESM / UMD 两套）
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": true,
+
+    // 声明产物与 src/lib 同构：dist-lib/index.d.ts + dist-lib/three-engine/*.d.ts
+    "rootDir": "./src/lib",
+    "outDir": "./dist-lib",
+
+    // 与 app 保持一致的下标安全策略
+    "noUncheckedIndexedAccess": true,
+
+    // 第三方 .d.ts（@types/three）不做检查，避免上游类型噪音阻塞库构建
+    "skipLibCheck": true,
+
+    // src/lib 里有两处 `import.meta.env.DEV` 调试开关，需要 vite 的客户端类型声明
+    "types": ["vite/client"],
+
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.lib.tsbuildinfo"
+  },
+  // 只纳入要发布的模块：Cesium 相关的 cesium-utils / road-mvt-scene 依赖全局 Cesium，
+  // 不属于本库（它们仍在 src/lib 下供 app 使用）
+  "include": ["src/lib/index.ts", "src/lib/three-engine/**/*.ts"]
+}

@@ -1,0 +1,136 @@
+import { describe, expect, it, vi } from 'vitest'
+import * as THREE from 'three'
+import { DroneFly } from '../drone-fly'
+
+/**
+ * 录像取景的回归护栏。
+ *
+ * 真机只有一个云台相机,所以录到的画面必须恒为云台取景 —— 无论用户当前在看
+ * 观察者 / 跟随 / 机载哪个视角。这层行为没法靠肉眼在页面上看出来(屏幕显示的
+ * 始终是用户视角),所以在这里用假渲染器把它钉死。
+ *
+ * 注意录制源是独立的离屏画布:主画布随后还要渲染用户视角,而画布捕获是按
+ * "绘制之后"抓帧的,直接抓主画布会把用户视角录进去。所以"录到了什么"这件事
+ * 等价于"搬进录制画布的那一帧是什么"。
+ */
+
+/** 云台在世界坐标里的位置(测试里固定住,便于断言) */
+const GIMBAL_POSITION = new THREE.Vector3(0, 1.2, 0)
+/** 镜头沿光轴前移量,与实现里的 GIMBAL_CAMERA_OFFSET 保持一致 */
+const GIMBAL_OFFSET = 0.12
+/** 观察者视角下相机故意摆得离飞机很远,用来区分"用户视角帧"和"云台取景帧" */
+const ORBIT_POSITION = new THREE.Vector3(6, 3.5, 7)
+
+function createHarness(gimbalReady = true) {
+  const scene = new THREE.Scene()
+  const camera = new THREE.PerspectiveCamera(60, 1.6, 0.1, 1000)
+  camera.position.copy(ORBIT_POSITION)
+
+  /* 记录每一次 render 时相机在哪 —— 这就是"这一帧拍到了什么"的判据 */
+  const renderedFrom: THREE.Vector3[] = []
+  const renderer = {
+    domElement: document.createElement('canvas'),
+    render: (_scene: unknown, cam: THREE.PerspectiveCamera): void => {
+      renderedFrom.push(cam.position.clone())
+    },
+  }
+
+  const fly = new DroneFly(scene, camera, renderer as never, null)
+  fly.rig = {
+    getGimbalCameraTransform: (target: THREE.Object3D): boolean => {
+      if (!gimbalReady) return false
+      target.position.copy(GIMBAL_POSITION)
+      target.quaternion.identity()
+      return true
+    },
+  } as never
+
+  /* 录制画布:搬进这里的那一帧就是录到的画面。尺寸与主画布一致,不触发重设 */
+  const drawImage = vi.fn()
+  const track = { requestFrame: vi.fn() }
+  const recordContext = {
+    canvas: document.createElement('canvas'),
+    drawImage,
+  } as unknown as CanvasRenderingContext2D
+  const setTrack = (): void => {
+    const target = fly as unknown as { captureTrack: unknown; recordContext: unknown }
+    target.captureTrack = track
+    target.recordContext = recordContext
+  }
+  return { fly, camera, renderedFrom, track, drawImage, setTrack }
+}
+
+describe('DroneFly 录像取景', () => {
+  it('未录制时不渲染取景帧、不动相机(零开销)', () => {
+    const { fly, camera, renderedFrom, track, drawImage } = createHarness()
+
+    fly.captureRecordingFrame()
+
+    expect(renderedFrom).toHaveLength(0)
+    expect(track.requestFrame).not.toHaveBeenCalled()
+    expect(drawImage).not.toHaveBeenCalled()
+    expect(camera.position.toArray()).toEqual(ORBIT_POSITION.toArray())
+  })
+
+  it('观察者视角下录的是云台取景,且相机位姿原样还回去', () => {
+    const { fly, camera, renderedFrom, track, drawImage, setTrack } = createHarness()
+    setTrack()
+    fly.cameraMode = 'orbit'
+
+    fly.captureRecordingFrame()
+
+    // 恰好渲一帧,且是从云台镜片位置渲的(而不是用户所在的观察者位置)
+    expect(renderedFrom).toHaveLength(1)
+    const expected = GIMBAL_POSITION.clone()
+    expected.z -= GIMBAL_OFFSET
+    expect(renderedFrom[0]?.toArray()).toEqual(expected.toArray())
+    // 这一帧必须被搬进录制画布,否则录制器没有内容可录
+    expect(drawImage).toHaveBeenCalledTimes(1)
+    expect(track.requestFrame).toHaveBeenCalledTimes(1)
+    // 屏幕上的观察者视角不受影响:位姿必须已还原
+    expect(camera.position.toArray()).toEqual(ORBIT_POSITION.toArray())
+  })
+
+  it('跟随视角下同样以云台取景,且相机位姿原样还回去', () => {
+    const { fly, camera, renderedFrom, track, drawImage, setTrack } = createHarness()
+    setTrack()
+    fly.cameraMode = 'follow'
+
+    fly.captureRecordingFrame()
+
+    expect(renderedFrom).toHaveLength(1)
+    expect(renderedFrom[0]?.x).toBeCloseTo(GIMBAL_POSITION.x, 6)
+    expect(renderedFrom[0]?.y).toBeCloseTo(GIMBAL_POSITION.y, 6)
+    expect(drawImage).toHaveBeenCalledTimes(1)
+    expect(track.requestFrame).toHaveBeenCalledTimes(1)
+    expect(camera.position.toArray()).toEqual(ORBIT_POSITION.toArray())
+  })
+
+  it('机载视角下相机本就在云台上,直接搬走这一帧,不做多余摆动', () => {
+    const { fly, camera, renderedFrom, track, drawImage, setTrack } = createHarness()
+    setTrack()
+    fly.cameraMode = 'fpv'
+    const before = camera.position.clone()
+
+    fly.captureRecordingFrame()
+
+    expect(renderedFrom).toHaveLength(1)
+    expect(drawImage).toHaveBeenCalledTimes(1)
+    expect(track.requestFrame).toHaveBeenCalledTimes(1)
+    expect(renderedFrom[0]?.toArray()).toEqual(before.toArray())
+    expect(camera.position.toArray()).toEqual(before.toArray())
+  })
+
+  it('云台不可用时不抓帧,也不留下半截位姿', () => {
+    const { fly, camera, renderedFrom, track, drawImage, setTrack } = createHarness(false)
+    setTrack()
+    fly.cameraMode = 'orbit'
+
+    fly.captureRecordingFrame()
+
+    expect(renderedFrom).toHaveLength(0)
+    expect(track.requestFrame).not.toHaveBeenCalled()
+    expect(drawImage).not.toHaveBeenCalled()
+    expect(camera.position.toArray()).toEqual(ORBIT_POSITION.toArray())
+  })
+})

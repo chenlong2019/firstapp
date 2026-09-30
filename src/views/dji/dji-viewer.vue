@@ -2,6 +2,8 @@
   <main class="sandbox" data-testid="sandbox-root">
     <div ref="viewportRef" class="viewport" aria-label="DJI 飞行沙盒三维视口"></div>
     <div class="vignette"></div>
+    <!-- 拍照快门闪光:盖住取景切换的那一帧 -->
+    <div v-if="shutterFlash" class="shutter-flash" data-testid="shutter-flash" aria-hidden="true"></div>
 
     <!-- ═══════════════════════ 左侧:分页面板 ═══════════════════════ -->
     <aside class="panel panel-left">
@@ -143,6 +145,24 @@
                 <span>显示障碍物</span>
               </label>
               <label class="switch">
+                <input
+                  v-model="showMissionWaypoints"
+                  data-testid="toggle-mission-waypoints"
+                  type="checkbox"
+                  @change="applyWorldVisibility"
+                />
+                <span>显示航点</span>
+              </label>
+              <label class="switch">
+                <input
+                  v-model="showMissionPath"
+                  data-testid="toggle-mission-path"
+                  type="checkbox"
+                  @change="applyWorldVisibility"
+                />
+                <span>显示航线</span>
+              </label>
+              <label class="switch">
                 <input v-model="showRadarBeams" type="checkbox" @change="applyWorldVisibility" />
                 <span>雷达射线</span>
               </label>
@@ -156,6 +176,352 @@
               </label>
               <button type="button" class="mini" @click="clearTrail">清除航迹</button>
             </div>
+          </section>
+        </template>
+
+        <!-- ─────────── 航线 ─────────── -->
+        <template v-else-if="tab === 'mission'">
+          <section class="card">
+            <div class="card-title">
+              <span>航线任务</span>
+              <em class="badge" :class="missionTone">{{ snap.mission.statusLabel }}</em>
+            </div>
+            <div class="btn-grid">
+              <button
+                type="button"
+                data-testid="mission-start"
+                class="primary"
+                :disabled="!canStartMission"
+                @click="doStartMission"
+              >
+                执行航线
+              </button>
+              <button type="button" data-testid="mission-pause" :disabled="!canPauseMission" @click="doPauseMission">
+                暂停
+              </button>
+              <button
+                type="button"
+                data-testid="mission-resume"
+                :disabled="!canResumeMission"
+                @click="doResumeMission"
+              >
+                继续
+              </button>
+              <button type="button" data-testid="mission-stop" class="wide" :disabled="!canStopMission" @click="doStopMission">
+                停止任务(原地悬停)
+              </button>
+            </div>
+            <p v-if="missionBlockReason" class="block-hint" data-testid="mission-block">{{ missionBlockReason }}</p>
+            <p class="fine-print">
+              地面直接点「执行航线」会先自动起飞,到 1.2 米后自动接上航线;空中启动同样从首个航点走起。
+              飞向首个航点与返航同款分段:先垂直调整到航点高度 → 水平飞过去 → 收到航点高度 →
+              机头对准航线方向,之后才开始执行航线。执行中拨动摇杆会暂停任务并交回手动控制。
+            </p>
+          </section>
+
+          <section class="card">
+            <div class="card-title">
+              <span>任务参数</span>
+              <em>{{ snap.mission.total }} 个航点</em>
+            </div>
+            <label class="slider-row">
+              <span class="slider-label">巡航速度</span>
+              <input
+                type="range"
+                data-testid="mission-speed"
+                min="1"
+                max="16"
+                step="0.5"
+                :value="snap.mission.config.autoSpeed"
+                @input="onMissionSpeedInput"
+              />
+              <strong>{{ snap.mission.config.autoSpeed.toFixed(1) }} m/s</strong>
+            </label>
+            <p class="row-label">机头朝向</p>
+            <div class="segmented two">
+              <button
+                type="button"
+                data-testid="mission-heading-auto"
+                :class="{ active: snap.mission.config.headingMode === 'auto' }"
+                @click="applyMissionConfig({ headingMode: 'auto' })"
+              >
+                指向下一航点
+              </button>
+              <button
+                type="button"
+                data-testid="mission-heading-fixed"
+                :class="{ active: snap.mission.config.headingMode === 'fixed' }"
+                @click="applyMissionConfig({ headingMode: 'fixed' })"
+              >
+                锁定起始航向
+              </button>
+            </div>
+            <p class="row-label">过点方式</p>
+            <div class="segmented two">
+              <button
+                type="button"
+                data-testid="mission-path-straight"
+                :class="{ active: snap.mission.config.pathMode === 'straight' }"
+                @click="applyMissionConfig({ pathMode: 'straight' })"
+              >
+                到点减速
+              </button>
+              <button
+                type="button"
+                data-testid="mission-path-curved"
+                :class="{ active: snap.mission.config.pathMode === 'curved' }"
+                @click="applyMissionConfig({ pathMode: 'curved' })"
+              >
+                曲线过点
+              </button>
+            </div>
+            <p class="row-label">全部完成后</p>
+            <div class="segmented three">
+              <button
+                v-for="action in MISSION_FINISH_ACTIONS"
+                :key="action.key"
+                type="button"
+                :data-testid="`mission-finish-${action.key}`"
+                :class="{ active: snap.mission.config.finishAction === action.key }"
+                @click="applyMissionConfig({ finishAction: action.key })"
+              >
+                {{ action.label }}
+              </button>
+            </div>
+            <label class="switch">
+              <input
+                type="checkbox"
+                data-testid="mission-loop"
+                :checked="snap.mission.config.loop"
+                @change="onMissionLoopToggle"
+              />
+              <span>循环执行(完成后回到第 1 个航点)</span>
+            </label>
+            <p class="fine-print">
+              曲线过点保持巡航速度、距航点 3 米就切向下一点,所以会忽略航点悬停;直线模式按刹车距离提前收油,过点更稳。
+            </p>
+          </section>
+
+          <section class="card">
+            <div class="card-title">
+              <span>航点列表</span>
+              <em>{{ snap.mission.waypoints.length }} 个</em>
+            </div>
+            <fieldset class="waypoint-fieldset" :disabled="!missionEditable">
+              <ul class="waypoint-list" data-testid="waypoint-list">
+                <li
+                  v-for="(row, index) in waypointDraft"
+                  :key="index"
+                  :class="{ active: isActiveWaypoint(index), selected: sceneEdit.selectedIndex === index }"
+                  :data-testid="`waypoint-${index}`"
+                  @click="selectWaypoint(index)"
+                >
+                  <div class="wp-head">
+                    <span class="wp-index">{{ index + 1 }}</span>
+                    <span class="wp-coord">E {{ row.x }} / S {{ row.z }}</span>
+                    <button
+                      type="button"
+                      class="mini"
+                      :data-testid="`waypoint-remove-${index}`"
+                      @click.stop="removeWaypoint(index)"
+                    >
+                      删除
+                    </button>
+                  </div>
+                  <div class="wp-row">
+                    <label class="wp-field">
+                      <span>X</span>
+                      <input
+                        class="wp-input"
+                        type="number"
+                        step="2"
+                        :value="row.x"
+                        @input="onWaypointTextInput(index, 'x', $event)"
+                      />
+                    </label>
+                    <label class="wp-field">
+                      <span>Z</span>
+                      <input
+                        class="wp-input"
+                        type="number"
+                        step="2"
+                        :value="row.z"
+                        @input="onWaypointTextInput(index, 'z', $event)"
+                      />
+                    </label>
+                    <label class="wp-field">
+                      <span>高度</span>
+                      <input
+                        class="wp-input"
+                        type="number"
+                        step="1"
+                        min="1"
+                        :value="row.altitude"
+                        @input="onWaypointTextInput(index, 'altitude', $event)"
+                      />
+                    </label>
+                  </div>
+                  <div class="wp-row">
+                    <label class="wp-field">
+                      <span>速度</span>
+                      <input
+                        class="wp-input"
+                        type="number"
+                        step="1"
+                        min="0"
+                        max="16"
+                        :value="row.speed"
+                        @input="onWaypointTextInput(index, 'speed', $event)"
+                      />
+                    </label>
+                    <label class="wp-field">
+                      <span>悬停</span>
+                      <input
+                        class="wp-input"
+                        type="number"
+                        step="1"
+                        min="0"
+                        max="60"
+                        :value="row.hoverSeconds"
+                        @input="onWaypointTextInput(index, 'hoverSeconds', $event)"
+                      />
+                    </label>
+                    <label class="wp-field">
+                      <input type="checkbox" :checked="row.gimbalOn" @change="onWaypointGimbalToggle(index, $event)" />
+                      <span>云台</span>
+                      <input
+                        class="wp-input"
+                        type="number"
+                        step="5"
+                        min="-90"
+                        max="60"
+                        :value="row.gimbalPitch"
+                        :disabled="!row.gimbalOn"
+                        @input="onWaypointTextInput(index, 'gimbalPitch', $event)"
+                      />
+                    </label>
+                    <label class="wp-field">
+                      <span>动作</span>
+                      <select class="wp-select" :value="row.action" @change="onWaypointActionChange(index, $event)">
+                        <option v-for="action in MISSION_ACTIONS" :key="action.key" :value="action.key">
+                          {{ action.label }}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+                  <em v-if="isActiveWaypoint(index)" class="wp-flag">当前目标</em>
+                </li>
+                <li v-if="!waypointDraft.length" class="muted">暂无航点</li>
+              </ul>
+            </fieldset>
+            <div class="segmented three">
+              <button type="button" data-testid="mission-add" :disabled="!missionEditable" @click="addWaypoint">
+                添加航点
+              </button>
+              <button type="button" data-testid="mission-preset" :disabled="!missionEditable" @click="useDefaultMission">
+                示例航线
+              </button>
+              <button type="button" data-testid="mission-clear" :disabled="!missionEditable" @click="clearWaypoints">
+                清空
+              </button>
+            </div>
+            <p v-if="!missionEditable" class="fine-print">
+              任务执行中:停止任务之后才能修改航点(与真机"航线上传后不可改"一致)。
+            </p>
+          </section>
+
+          <section class="card">
+            <div class="card-title">
+              <span>场景内编辑</span>
+              <em class="badge" :class="sceneEditBadge.tone">{{ sceneEditBadge.label }}</em>
+            </div>
+            <label class="switch">
+              <input
+                type="checkbox"
+                data-testid="scene-edit-toggle"
+                :checked="sceneEdit.enabled"
+                @change="onSceneEditToggle"
+              />
+              <span>在三维场景里直接编辑航点</span>
+            </label>
+            <ul class="gesture-list" data-testid="scene-edit-help">
+              <li><b>拖拽航点</b><span>在它当前高度的水平面内移动</span></li>
+              <li><b>Shift + 拖拽</b><span>改高度(按住 Alt 可关掉 1 米吸附)</span></li>
+              <li><b>双击地面</b><span>在该处插入一个航点</span></li>
+              <li><b>Delete</b><span>删除当前选中的航点,Esc 取消选中</span></li>
+            </ul>
+            <div class="scene-edit-status" data-testid="scene-edit-status">
+              <span v-if="sceneEdit.selectedIndex >= 0">
+                已选中 <b>航点 {{ sceneEdit.selectedIndex + 1 }}</b>
+                <template v-if="selectedWaypoint">
+                  · E {{ signed(selectedWaypoint.x, 0) }} / S {{ signed(selectedWaypoint.z, 0) }} /
+                  {{ selectedWaypoint.altitude.toFixed(0) }} m
+                </template>
+              </span>
+              <span v-else>未选中航点(在场景里点一下航点光柱)</span>
+              <em v-if="sceneEdit.dragging">{{ sceneEdit.mode === 'altitude' ? '调整高度中' : '移动中' }}</em>
+              <em v-else-if="sceneEdit.enabled && !sceneEdit.active">{{ sceneEditBlockReason }}</em>
+            </div>
+            <div class="segmented three">
+              <button
+                type="button"
+                data-testid="scene-edit-delete"
+                :disabled="sceneEdit.selectedIndex < 0 || !missionEditable"
+                @click="deleteSelectedWaypoint"
+              >
+                删除选中
+              </button>
+              <button
+                type="button"
+                data-testid="scene-edit-add"
+                :disabled="!missionEditable"
+                @click="addWaypointAtDrone"
+              >
+                飞机位置新增
+              </button>
+              <button type="button" data-testid="scene-edit-frame" @click="frameMission">框住航线</button>
+            </div>
+            <div class="segmented two">
+              <button
+                type="button"
+                data-testid="scene-edit-select-first"
+                :disabled="!snap.mission.total"
+                @click="selectWaypoint(0)"
+              >
+                选中第 1 个航点
+              </button>
+              <button
+                type="button"
+                data-testid="scene-edit-deselect"
+                :disabled="sceneEdit.selectedIndex < 0"
+                @click="selectWaypoint(-1)"
+              >
+                取消选中
+              </button>
+            </div>
+            <div class="minimap-row">
+              <label class="switch">
+                <input
+                  v-model="showMissionWaypoints"
+                  data-testid="toggle-mission-waypoints"
+                  type="checkbox"
+                  @change="applyWorldVisibility"
+                />
+                <span>显示航点</span>
+              </label>
+              <label class="switch">
+                <input
+                  v-model="showMissionPath"
+                  data-testid="toggle-mission-path"
+                  type="checkbox"
+                  @change="applyWorldVisibility"
+                />
+                <span>显示航线</span>
+              </label>
+            </div>
+            <p class="fine-print">
+              隐藏只是不画,不影响任务执行;编辑航点则要求航线未在执行,且处于观察者视角(机载视角下屏幕里没有可点的目标)。
+            </p>
           </section>
         </template>
 
@@ -545,6 +911,32 @@
           </div>
         </section>
 
+        <section v-if="snap.mission.status !== 'idle' || snap.mission.total" class="card" data-testid="hud-mission">
+          <div class="card-title">
+            <span>航线任务</span>
+            <em :class="missionTone">{{ snap.mission.statusLabel }}</em>
+          </div>
+          <div class="progress-head">
+            <span>{{ missionProgressText }}</span>
+            <em>{{ missionPercent }}%</em>
+          </div>
+          <div class="progress-bar">
+            <span :style="{ width: `${missionPercent}%` }"></span>
+          </div>
+          <div class="mission-meta">
+            <div><span>剩余航程</span><strong>{{ snap.mission.distanceLeft.toFixed(0) }} m</strong></div>
+            <div><span>预计剩余</span><strong>{{ missionEtaText }}</strong></div>
+            <div><span>已执行</span><strong>{{ formatClock(snap.mission.elapsed) }}</strong></div>
+            <div>
+              <span>目标高度</span>
+              <strong>{{ snap.mission.active ? `${snap.mission.active.altitude.toFixed(0)} m` : '—' }}</strong>
+            </div>
+          </div>
+          <p v-if="snap.mission.pauseReason" class="brake-flag" data-testid="mission-pause-reason">
+            已暂停 · {{ snap.mission.pauseReason }}
+          </p>
+        </section>
+
         <section class="card">
           <div class="instruments">
             <div class="instrument">
@@ -742,16 +1134,44 @@
             <button type="button" @click="centerGimbal">云台回中</button>
             <button type="button" @click="lookDown">垂直向下</button>
             <button type="button" @click="lookLevel">水平前视</button>
-            <button type="button" :class="{ active: snap.recording }" @click="toggleRecording">
+            <button
+              type="button"
+              :class="{ active: snap.recording }"
+              data-testid="record-toggle"
+              @click="toggleRecording"
+            >
               {{ snap.recording ? '停止录像' : '开始录像' }}
             </button>
           </div>
           <div class="segmented two">
-            <button type="button" @click="takePhoto">拍照(已拍 {{ snap.photoCount }} 张)</button>
+            <button type="button" data-testid="photo-button" :disabled="photoBusy" @click="takePhoto">
+              {{ photoBusy ? '拍摄中…' : `拍照(已拍 ${snap.photoCount} 张)` }}
+            </button>
             <button type="button" @click="toggleArms" :disabled="snap.airborne">机臂收纳 / 展开</button>
+          </div>
+          <div v-if="photoNote || recordNote || lastPhoto || lastRecording" class="capture-panel">
+            <p v-if="recordNote" class="capture-note" data-testid="record-note">{{ recordNote }}</p>
+            <a
+              v-if="lastRecording"
+              class="capture-note capture-download"
+              :href="lastRecording.url"
+              :download="lastRecording.name"
+              data-testid="record-download"
+            >
+              手动下载最近一次录像({{ (lastRecording.size / 1048576).toFixed(1) }}MB)
+            </a>
+            <p v-if="photoNote" class="capture-note" data-testid="photo-note">{{ photoNote }}</p>
+            <img
+              v-if="lastPhoto"
+              class="capture-thumb"
+              :src="lastPhoto.dataUrl"
+              alt="最近一张照片"
+              data-testid="photo-thumb"
+            />
           </div>
           <p class="fine-print">
             云台为三轴增稳平台:机体倾斜由云台反向补偿,超出机械行程(−90°~+60°)才让画面跟着歪。
+            拍照与录像都用云台取景(与机载视角同一取景),文件均自动下载。
           </p>
         </section>
 
@@ -788,6 +1208,7 @@
             v-for="mode in CAMERA_MODE_LIST"
             :key="mode.key"
             type="button"
+            :data-testid="`camera-${mode.key}`"
             :class="{ active: cameraMode === mode.key }"
             @click="setCameraMode(mode.key)"
           >
@@ -804,7 +1225,7 @@
         <p class="keyhint">
           W/S 升降 · A/D 偏航 · ↑↓←→ 前后左右<br />
           Space 起飞 · L 降落 · R 返航 · K 停桨 · P 电源<br />
-          Z/X 云台 · V 录像 · B 拍照 · C 切视角
+          G 航线(执行/暂停/继续) · Z/X 云台 · V 录像 · B 拍照 · C 切视角
         </p>
       </div>
       <StickDial
@@ -822,10 +1243,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { GameInstance } from '../../lib/three-engine/game-instance'
 import { CAMERA_MODE_LIST } from '../../lib/three-engine/drone-fly'
-import type { CameraMode } from '../../lib/three-engine/drone-fly'
+import type { CameraMode, MissionEditState, PhotoShot } from '../../lib/three-engine/drone-fly'
 import {
   DRONE_SPEC,
   FLIGHT_MODES,
@@ -834,10 +1255,18 @@ import {
   PHASE_LABELS,
   POSITION_SOURCE_LABELS,
   DEFAULT_CONFIG,
+  DEFAULT_MISSION,
+  DEFAULT_MISSION_CONFIG,
+  MISSION_STAGE_LABELS,
+  MISSION_STATUS_LABELS,
+  isMissionDepartStage,
   type DroneSnapshot,
   type FaultFlags,
   type FlightMode,
   type FlightPhase,
+  type MissionConfig,
+  type MissionFinishAction,
+  type MissionWaypoint,
   type SimConfig,
 } from '../../lib/three-engine/drone-sim'
 import { STATUS_PATTERN_LIST, describeBatteryLevel } from '../../lib/three-engine/drone-lights'
@@ -854,6 +1283,7 @@ const ready = ref(false)
 
 const TABS = [
   { key: 'flight', label: '飞行' },
+  { key: 'mission', label: '航线' },
   { key: 'lights', label: '灯光' },
   { key: 'config', label: '参数' },
   { key: 'faults', label: '故障' },
@@ -861,6 +1291,19 @@ const TABS = [
 ] as const
 type TabKey = (typeof TABS)[number]['key']
 const tab = ref<TabKey>('flight')
+
+type WaypointNumberKey = 'x' | 'z' | 'altitude' | 'speed' | 'hoverSeconds' | 'gimbalPitch'
+/** 航点编辑器的本地草稿:数字字段存字符串,允许 "-"、"1." 这类输入中间态 */
+interface WaypointDraftRow {
+  x: string
+  z: string
+  altitude: string
+  speed: string
+  hoverSeconds: string
+  gimbalPitch: string
+  gimbalOn: boolean
+  action: MissionWaypoint['action']
+}
 
 const PHASE_FLOW: Array<{ phase: FlightPhase; label: string }> = [
   { phase: 'powerOff', label: '未上电' },
@@ -898,6 +1341,17 @@ const AUX_MODES: Array<{ key: AuxLightMode; label: string }> = [
   { key: 'auto', label: '自动' },
   { key: 'on', label: '开启' },
   { key: 'off', label: '关闭' },
+]
+/** 航点任务结束动作 */
+const MISSION_FINISH_ACTIONS: Array<{ key: MissionFinishAction; label: string }> = [
+  { key: 'hover', label: '原地悬停' },
+  { key: 'rth', label: '自动返航' },
+  { key: 'land', label: '自动降落' },
+]
+/** 航点到点动作 */
+const MISSION_ACTIONS: Array<{ key: MissionWaypoint['action']; label: string }> = [
+  { key: 'none', label: '无动作' },
+  { key: 'photo', label: '拍照' },
 ]
 const FAILSAFE_MODES: Array<{ key: SimConfig['rcFailsafe']; label: string }> = [
   { key: 'rth', label: '返航' },
@@ -944,6 +1398,20 @@ const lightAuto = ref(true)
 const showObstacles = ref(true)
 const showAxes = ref(false)
 const showRadarBeams = ref(false)
+/** 航点标记与航线折线的显隐(拆成两个开关;只影响绘制,不影响任务执行) */
+const showMissionWaypoints = ref(true)
+const showMissionPath = ref(true)
+/** 场景内编辑航点的实时状态(100ms 从装配层取) */
+const sceneEdit = ref<MissionEditState>({
+  enabled: false,
+  active: false,
+  selectedIndex: -1,
+  hoverIndex: -1,
+  dragging: false,
+  mode: null,
+})
+/** 航点编辑器的显示源(见 syncWaypointDraft 的说明) */
+const waypointDraft = ref<WaypointDraftRow[]>([])
 /** 底部辅助照明灯的下向光束锥(默认不显示,勾选才画) */
 const showAuxBeam = ref(false)
 const radar = ref<RadarSnapshot>({
@@ -959,6 +1427,15 @@ const radar = ref<RadarSnapshot>({
 const dialLeft = reactive({ x: 0, y: 0 })
 const dialRight = reactive({ x: 0, y: 0 })
 const keyAxes = reactive({ throttle: 0, yaw: 0, pitch: 0, roll: 0 })
+/** 最近一张照片(云台取景)与提示文案 */
+const lastPhoto = ref<PhotoShot | null>(null)
+const photoNote = ref('')
+const photoBusy = ref(false)
+/** 快门闪一下,盖住拍照那一帧的取景切换 */
+const shutterFlash = ref(false)
+const recordNote = ref('')
+/** 最近一次录制成片:自动下载可能被浏览器静默拦掉,这里留一份供手动下载 */
+const lastRecording = ref<{ url: string; name: string; size: number } | null>(null)
 
 // ————————————————————————————— 派生状态 —————————————————————————————
 
@@ -1087,6 +1564,62 @@ const obstacleCells = computed(() => {
   }))
 })
 
+// ————————————————————————————— 航线任务派生状态 —————————————————————————————
+
+const missionTone = computed(() => {
+  switch (snap.value.mission.status) {
+    case 'running':
+      return 'ok'
+    case 'paused':
+      return 'warn'
+    default:
+      return ''
+  }
+})
+/** 航点列表只在任务未执行时可改:与真机"航线上传后不可修改"一致 */
+const missionEditable = computed(() => snap.value.mission.status === 'idle')
+const canStartMission = computed(
+  () =>
+    snap.value.mission.status === 'idle' &&
+    snap.value.mission.total > 0 &&
+    ['standby', 'motorsOn', 'takingOff', 'flying', 'rth'].includes(snap.value.phase),
+)
+const canPauseMission = computed(() => snap.value.mission.status === 'running')
+const canResumeMission = computed(() => snap.value.mission.status === 'paused')
+const canStopMission = computed(
+  () => snap.value.mission.status !== 'idle' || snap.value.phase === 'takingOff',
+)
+/** 启动不了时把原因摆出来,别让按钮灰着却没有解释 */
+const missionBlockReason = computed(() => {
+  const mission = snap.value.mission
+  if (mission.status !== 'idle') return ''
+  if (mission.total === 0) return '航线为空:先「添加航点」或「示例航线」'
+  if (snap.value.positionSource === 'atti') return '当前无定位(姿态模式),航点任务需要 GNSS'
+  if (!canStartMission.value) return `当前阶段(${snap.value.phaseLabel})无法启动航线`
+  return ''
+})
+const missionProgressText = computed(() => {
+  const mission = snap.value.mission
+  if (mission.status === 'idle') {
+    return mission.total ? `待执行 · 共 ${mission.total} 个航点` : '暂无航线'
+  }
+  // 启航四步还没走完:这几步都是"去首个航点"的准备动作,单独标出来
+  if (isMissionDepartStage(mission.stage)) {
+    return `启航(航点 1/${mission.total}) · ${mission.stageLabel}`
+  }
+  return `第 ${mission.index + 1}/${mission.total} 个航点 · ${mission.stageLabel}`
+})
+const missionPercent = computed(() => Math.round(snap.value.mission.progress * 100))
+const missionEtaText = computed(() => {
+  if (snap.value.mission.status === 'idle') return '—'
+  const seconds = snap.value.mission.etaSeconds
+  return seconds >= 60
+    ? `${Math.floor(seconds / 60)} 分 ${Math.round(seconds % 60)} 秒`
+    : `${seconds.toFixed(0)} 秒`
+})
+const isActiveWaypoint = (index: number): boolean =>
+  snap.value.mission.status !== 'idle' && snap.value.mission.index === index
+
 /** 前视雷达双射线读数(0-5m 红 / 5-10m 黄 / 更远或无命中绿) */
 const radarRays = computed(() => [
   { label: '左射线', hit: radar.value.left },
@@ -1213,6 +1746,7 @@ function emptySnapshot(): DroneSnapshot {
     criticalBattery: false,
     lowBatteryCountdown: 0,
     rthStage: '',
+    landingStage: '',
     rthReason: '',
     warnings: [],
     events: [],
@@ -1231,6 +1765,23 @@ function emptySnapshot(): DroneSnapshot {
     recordSeconds: 0,
     photoCount: 0,
     cameraZoom: 1,
+    mission: {
+      status: 'idle',
+      statusLabel: MISSION_STATUS_LABELS.idle,
+      stage: 'idle',
+      stageLabel: MISSION_STAGE_LABELS.idle,
+      index: -1,
+      total: DEFAULT_MISSION.length,
+      passes: 0,
+      elapsed: 0,
+      distanceLeft: 0,
+      progress: 0,
+      etaSeconds: 0,
+      pauseReason: '',
+      active: null,
+      waypoints: DEFAULT_MISSION.map((waypoint) => ({ ...waypoint })),
+      config: { ...DEFAULT_MISSION_CONFIG },
+    },
   }
 }
 
@@ -1339,6 +1890,10 @@ function handleKeyDown(event: KeyboardEvent): void {
     case 'x':
       event.preventDefault()
       gameInstance?.droneFly?.nudgeGimbal(5)
+      break
+    case 'g':
+      event.preventDefault()
+      toggleMission()
       break
     case 'v':
       event.preventDefault()
@@ -1450,6 +2005,246 @@ function setBattery(level: number): void {
   sim()?.forceBatteryLevel(level)
 }
 
+// ————————————————————————————— 航线任务 —————————————————————————————
+
+function doStartMission(): void {
+  gameInstance?.droneFly?.startMission()
+}
+
+function doPauseMission(): void {
+  gameInstance?.droneFly?.pauseMission('用户暂停')
+}
+
+function doResumeMission(): void {
+  gameInstance?.droneFly?.resumeMission()
+}
+
+function doStopMission(): void {
+  gameInstance?.droneFly?.stopMission('用户停止')
+}
+
+/** 一个键走完"执行 → 暂停 → 继续"(G 键与底部快捷按钮共用) */
+function toggleMission(): void {
+  const status = snap.value.mission.status
+  if (status === 'running') doPauseMission()
+  else if (status === 'paused') doResumeMission()
+  else doStartMission()
+}
+
+function applyMissionConfig(patch: Partial<MissionConfig>): void {
+  gameInstance?.droneFly?.setMissionConfig(patch)
+  syncUi()
+}
+
+function onMissionSpeedInput(event: Event): void {
+  const value = Number((event.target as HTMLInputElement).value)
+  if (!Number.isFinite(value)) return
+  applyMissionConfig({ autoSpeed: value })
+}
+
+function onMissionLoopToggle(event: Event): void {
+  applyMissionConfig({ loop: (event.target as HTMLInputElement).checked })
+}
+
+/** 航点数字字段的取值范围(与内核的归一化保持一致) */
+const WAYPOINT_RANGES: Record<WaypointNumberKey, { min: number; max: number }> = {
+  x: { min: -2000, max: 2000 },
+  z: { min: -2000, max: 2000 },
+  altitude: { min: 1, max: 500 },
+  speed: { min: 0, max: 16 },
+  hoverSeconds: { min: 0, max: 60 },
+  gimbalPitch: { min: -90, max: 60 },
+}
+
+function toDraftRow(waypoint: MissionWaypoint): WaypointDraftRow {
+  return {
+    x: String(waypoint.x),
+    z: String(waypoint.z),
+    altitude: String(waypoint.altitude),
+    speed: String(waypoint.speed),
+    hoverSeconds: String(waypoint.hoverSeconds),
+    gimbalPitch: String(waypoint.gimbalPitch ?? -45),
+    gimbalOn: waypoint.gimbalPitch !== null,
+    action: waypoint.action,
+  }
+}
+
+/** 输入框里正在编辑时不要用快照回写草稿,否则用户输到一半会被清掉 */
+function waypointEditing(): boolean {
+  const active = document.activeElement
+  return Boolean(active && active.closest('.waypoint-list'))
+}
+
+/**
+ * 把内核里的航点同步成"草稿"。
+ *
+ * 为什么需要草稿:面板每 100ms 重建一次快照并重渲染,而 Vue 的 `:value` 绑定会把输入框的
+ * 值改回模型值 —— 用户打到一半的 "−"、"1." 这种中间态会被抹掉,`change` 事件也就永远不会
+ * 派发(值已经被改回去了)。所以输入框的显示值以草稿为准,草稿在编辑期间不回写。
+ */
+function syncWaypointDraft(): void {
+  const list = gameInstance?.droneFly?.sim.mission
+  if (!list || waypointEditing()) return
+  const rows = list.map(toDraftRow)
+  const current = waypointDraft.value
+  const same =
+    current.length === rows.length &&
+    rows.every((row, index) => {
+      const draft = current[index]
+      if (!draft) return false
+      return (
+        draft.x === row.x &&
+        draft.z === row.z &&
+        draft.altitude === row.altitude &&
+        draft.speed === row.speed &&
+        draft.hoverSeconds === row.hoverSeconds &&
+        draft.gimbalOn === row.gimbalOn &&
+        (!row.gimbalOn || draft.gimbalPitch === row.gimbalPitch) &&
+        draft.action === row.action
+      )
+    })
+  if (!same) waypointDraft.value = rows
+}
+
+/**
+ * 航点列表的权威来源是仿真内核,不是界面快照。
+ * 快照每 100ms 才刷新一次,若拿快照改字段,连续编辑两格会丢掉前一格 —— 所以一律从 sim 现取。
+ */
+function currentWaypoints(): MissionWaypoint[] {
+  const list = gameInstance?.droneFly?.sim.mission ?? []
+  return list.map((waypoint) => ({ ...waypoint }))
+}
+
+function patchWaypoint(index: number, patch: Partial<MissionWaypoint>): void {
+  const fly = gameInstance?.droneFly
+  if (!fly) return
+  const list = currentWaypoints().map((waypoint, i) => (i === index ? { ...waypoint, ...patch } : waypoint))
+  fly.setMission(list)
+  syncUi()
+}
+
+/** 数字字段输入:先落草稿(保证输入框不被回写),再把合法值下发到内核 */
+function onWaypointTextInput(index: number, key: WaypointNumberKey, event: Event): void {
+  const raw = (event.target as HTMLInputElement).value
+  const draft = waypointDraft.value[index]
+  if (draft) draft[key] = raw
+  if (raw.trim() === '') return
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return
+  const range = WAYPOINT_RANGES[key]
+  patchWaypoint(index, { [key]: Math.min(range.max, Math.max(range.min, value)) } as Partial<MissionWaypoint>)
+}
+
+function onWaypointActionChange(index: number, event: Event): void {
+  const value = (event.target as HTMLSelectElement).value === 'photo' ? 'photo' : 'none'
+  const draft = waypointDraft.value[index]
+  if (draft) draft.action = value
+  patchWaypoint(index, { action: value })
+}
+
+function onWaypointGimbalToggle(index: number, event: Event): void {
+  const enabled = (event.target as HTMLInputElement).checked
+  const draft = waypointDraft.value[index]
+  if (draft) draft.gimbalOn = enabled
+  patchWaypoint(index, { gimbalPitch: enabled ? -45 : null })
+}
+
+function addWaypoint(): void {
+  const fly = gameInstance?.droneFly
+  if (!fly) return
+  const list = currentWaypoints()
+  const last = list[list.length - 1]
+  const next: Partial<MissionWaypoint> = last
+    ? { x: last.x + 12, z: last.z, altitude: last.altitude, speed: last.speed }
+    : { x: 0, z: -30, altitude: 30, speed: 0, hoverSeconds: 0, gimbalPitch: null, action: 'none' }
+  fly.setMission([...list, next])
+  syncUi()
+}
+
+function removeWaypoint(index: number): void {
+  const fly = gameInstance?.droneFly
+  if (!fly) return
+  fly.setMission(currentWaypoints().filter((_, i) => i !== index))
+  // 删掉的可能正是场景里选中的那个,索引会整体前移,直接取消选中最不容易出错
+  selectWaypoint(-1)
+  syncUi()
+}
+
+function useDefaultMission(): void {
+  selectWaypoint(-1)
+  gameInstance?.droneFly?.resetMissionToDefault()
+  syncUi()
+}
+
+function clearWaypoints(): void {
+  selectWaypoint(-1)
+  gameInstance?.droneFly?.setMission([])
+  syncUi()
+}
+
+// ————————————————————————————— 场景内编辑航点 —————————————————————————————
+
+/** 被选中的航点(读内核而不是快照,拖动过程中它每帧都在变) */
+const selectedWaypoint = computed(() => {
+  const index = sceneEdit.value.selectedIndex
+  if (index < 0) return null
+  return gameInstance?.droneFly?.sim.mission[index] ?? null
+})
+
+const sceneEditBadge = computed(() => {
+  const state = sceneEdit.value
+  if (!state.enabled) return { label: '已关闭', tone: '' }
+  if (state.dragging) return { label: '拖动中', tone: 'warn' }
+  if (state.active) return { label: '编辑中', tone: 'on' }
+  return { label: '待切换视角', tone: 'warn' }
+})
+
+const sceneEditBlockReason = computed(() => {
+  if (!missionEditable.value) return '任务执行中不可编辑'
+  if (cameraMode.value !== 'orbit') return '需切到观察者视角'
+  return '当前不可编辑'
+})
+
+function onSceneEditToggle(event: Event): void {
+  const enabled = (event.target as HTMLInputElement).checked
+  gameInstance?.droneFly?.setMissionEditEnabled(enabled)
+  if (enabled) syncUi()
+}
+
+/** 选中航点(-1 = 取消):面板列表与三维场景共用同一份选中态 */
+function selectWaypoint(index: number): void {
+  gameInstance?.droneFly?.setMissionSelected(index)
+  sceneEdit.value = { ...sceneEdit.value, selectedIndex: index }
+  if (index >= 0) revealWaypointRow(index)
+}
+
+function deleteSelectedWaypoint(): void {
+  const index = sceneEdit.value.selectedIndex
+  if (index < 0) return
+  gameInstance?.droneFly?.deleteMissionWaypoint(index)
+  syncUi()
+}
+
+function addWaypointAtDrone(): void {
+  gameInstance?.droneFly?.addMissionWaypointAtDrone()
+  syncUi()
+  const index = gameInstance?.droneFly?.getMissionSelected() ?? -1
+  if (index >= 0) revealWaypointRow(index)
+}
+
+/** 把观察者相机拉到能看全整条航线的位置(开着场景编辑也随时能用) */
+function frameMission(): void {
+  gameInstance?.droneFly?.frameMission()
+}
+
+/** 从场景里选中时,把列表里对应的那一行滚进视野(列表有最大高度,可能不在可视区) */
+function revealWaypointRow(index: number): void {
+  void nextTick(() => {
+    const row = document.querySelector(`[data-testid="waypoint-${index}"]`)
+    row?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
 // ————————————————————————————— 参数 / 故障 —————————————————————————————
 
 function applyConfig(patch: Partial<SimConfig>): void {
@@ -1508,11 +2303,88 @@ function lookLevel(): void {
 }
 
 function toggleRecording(): void {
-  sim()?.toggleRecording()
+  void (async () => {
+    const fly = gameInstance?.droneFly
+    if (!fly) return
+    if (fly.isRecording) {
+      const blob = await fly.stopRecording()
+      // 落盘由 onRecordingReady 回调统一处理,这里只报失败
+      if (!blob) recordNote.value = '录像为空,未保存'
+      return
+    }
+    if (!fly.startRecording()) {
+      recordNote.value = '当前环境不支持录像(需要 MediaRecorder)'
+      return
+    }
+    recordNote.value = '录制中(云台取景)…停止后自动保存'
+  })()
 }
 
 function takePhoto(): void {
-  sim()?.takePhoto()
+  void (async () => {
+    const fly = gameInstance?.droneFly
+    if (!fly || photoBusy.value) return
+    photoBusy.value = true
+    // 快门闪一下,盖住拍照那一帧的取景切换
+    shutterFlash.value = true
+    window.setTimeout(() => {
+      shutterFlash.value = false
+    }, 260)
+    const shot = await fly.requestPhoto()
+    photoBusy.value = false
+    if (!shot) {
+      photoNote.value = '拍照失败:相机未就绪'
+      return
+    }
+    lastPhoto.value = shot
+    sim()?.takePhoto()
+    const name = `DJI_Mini4Pro_photo_${timestampTag()}.png`
+    downloadDataUrl(shot.dataUrl, name)
+    photoNote.value = `已保存 ${name}(${shot.width}×${shot.height})`
+  })()
+}
+
+/** 文件名时间戳 YYYYMMDD_HHMMSS */
+function timestampTag(): string {
+  const now = new Date()
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return [
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`,
+    `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`,
+  ].join('_')
+}
+
+function downloadDataUrl(dataUrl: string, filename: string): void {
+  const anchor = document.createElement('a')
+  anchor.href = dataUrl
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+/** 录像成片由引擎回吐,界面负责落盘与提示 */
+function attachRecordingSink(): void {
+  const fly = gameInstance?.droneFly
+  if (!fly || fly.onRecordingReady) return
+  fly.onRecordingReady = (blob, seconds) => {
+    const name = `DJI_Mini4Pro_video_${timestampTag()}.webm`
+    downloadBlob(blob, name)
+    if (lastRecording.value) URL.revokeObjectURL(lastRecording.value.url)
+    lastRecording.value = { url: URL.createObjectURL(blob), name, size: blob.size }
+    recordNote.value = `已保存 ${name}(${seconds.toFixed(1)}s · ${(blob.size / 1048576).toFixed(1)}MB)`
+  }
 }
 
 function selectStatusPattern(key: StatusLightKey): void {
@@ -1541,6 +2413,8 @@ function onBatteryLevelInput(event: Event): void {
 
 function applyWorldVisibility(): void {
   gameInstance?.droneFly?.world?.setObstaclesVisible(showObstacles.value)
+  gameInstance?.droneFly?.setMissionWaypointsVisible(showMissionWaypoints.value)
+  gameInstance?.droneFly?.setMissionPathVisible(showMissionPath.value)
   gameInstance?.droneFly?.setRadarBeamsVisible(showRadarBeams.value)
   gameInstance?.droneFly?.setAuxBeamVisible(showAuxBeam.value)
   gameInstance?.setAxesVisible(showAxes.value)
@@ -1567,6 +2441,7 @@ function syncUi(): void {
     rigReport.value = gameInstance.droneFly?.getRigReport() ?? []
     applyWorldVisibility()
   }
+  attachRecordingSink()
   const next = gameInstance.getSnapshot()
   if (next) snap.value = next
   const radarNext = gameInstance.droneFly?.getRadarSnapshot()
@@ -1574,6 +2449,21 @@ function syncUi(): void {
   const lightSnapshot = gameInstance.getDroneLightsSnapshot()
   if (lightSnapshot) Object.assign(lights, lightSnapshot)
   lightAuto.value = !gameInstance.droneFly?.statusLightOverride
+  const editNext = gameInstance.droneFly?.getMissionEditState()
+  if (editNext) {
+    const current = sceneEdit.value
+    if (
+      current.enabled !== editNext.enabled ||
+      current.active !== editNext.active ||
+      current.selectedIndex !== editNext.selectedIndex ||
+      current.hoverIndex !== editNext.hoverIndex ||
+      current.dragging !== editNext.dragging ||
+      current.mode !== editNext.mode
+    ) {
+      sceneEdit.value = editNext
+    }
+  }
+  syncWaypointDraft()
   // 摇杆状态以仿真为准回读,保证面板与飞控看到的是同一份数据
   const actual = snap.value.stick
   if (Math.hypot(actual.throttle, actual.yaw, actual.pitch, actual.roll) < 0.001) {
@@ -1740,7 +2630,7 @@ onUnmounted(() => {
 .tabs {
   display: grid;
   flex: none;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 4px;
   padding: 8px 10px;
   border-bottom: 1px solid rgb(121 230 202 / 14%);
@@ -1830,6 +2720,57 @@ onUnmounted(() => {
     SFMono-Regular,
     Consolas,
     monospace;
+}
+/* ——— 拍照 / 录像 ——— */
+.capture-panel {
+  margin-top: 7px;
+  padding: 6px 7px;
+  background: rgb(10 26 30 / 72%);
+  border: 1px solid rgb(121 230 202 / 16%);
+  border-radius: 6px;
+}
+/* 自动下载可能被浏览器静默拦掉,留一条手动通道 */
+.capture-download {
+  display: inline-block;
+  margin-top: 4px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.capture-note {
+  margin: 0;
+  color: #79e6ca;
+  font:
+    400 8.5px/1.5 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  word-break: break-all;
+}
+.capture-thumb {
+  display: block;
+  width: 100%;
+  max-height: 92px;
+  margin-top: 6px;
+  object-fit: cover;
+  border: 1px solid rgb(121 230 202 / 22%);
+  border-radius: 4px;
+}
+.shutter-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 45%, rgb(255 255 255 / 82%), rgb(255 255 255 / 24%));
+  animation: shutterFade 260ms ease-out forwards;
+}
+@keyframes shutterFade {
+  0% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 .row-label {
   margin: 8px 0 5px;
@@ -2974,6 +3915,286 @@ button.mini:hover {
     monospace;
   letter-spacing: 0.02em;
   text-align: center;
+}
+
+/* ═══════════════════════════ 航线任务 ═══════════════════════════ */
+.waypoint-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.waypoint-list {
+  /* 航点再多也不能把整块面板撑长:超出就在列表内部滚(约 4 个航点的高度) */
+  max-height: 340px;
+  margin: 0;
+  padding: 0 3px 0 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-color: rgb(121 230 202 / 35%) transparent;
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+.waypoint-list::-webkit-scrollbar {
+  width: 5px;
+}
+.waypoint-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.waypoint-list::-webkit-scrollbar-thumb {
+  background: rgb(121 230 202 / 30%);
+  border-radius: 3px;
+}
+.waypoint-list::-webkit-scrollbar-thumb:hover {
+  background: rgb(121 230 202 / 55%);
+}
+.waypoint-list li {
+  margin-bottom: 6px;
+  padding: 6px 7px;
+  background: rgb(10 26 30 / 62%);
+  border: 1px solid rgb(121 230 202 / 14%);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.waypoint-list li:last-child {
+  margin-bottom: 0;
+}
+.waypoint-list li:hover {
+  border-color: rgb(121 230 202 / 34%);
+}
+.waypoint-list li.active {
+  background: rgb(58 44 12 / 58%);
+  border-color: rgb(255 197 61 / 45%);
+}
+/* 场景编辑选中的航点:与场景里那圈亮青色高亮同一个颜色 */
+.waypoint-list li.selected {
+  background: rgb(12 48 58 / 72%);
+  border-color: rgb(158 244 255 / 62%);
+  box-shadow: 0 0 0 1px rgb(158 244 255 / 22%);
+}
+.wp-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 5px;
+}
+.wp-index {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: #04140f;
+  background: #6ff0d0;
+  border-radius: 50%;
+  font:
+    700 9px/1 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.waypoint-list li.active .wp-index {
+  background: #ffc53d;
+}
+.wp-coord {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #5e8b84;
+  font:
+    400 8.5px/1.2 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wp-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.wp-row:last-of-type {
+  margin-bottom: 0;
+}
+.wp-field {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+  align-items: center;
+  color: #6f9c95;
+  font:
+    600 8px/1.2 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.wp-field input[type='checkbox'] {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  accent-color: #79e6ca;
+  cursor: pointer;
+}
+.wp-input,
+.wp-select {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 4px;
+  color: #cdeee6;
+  background: rgb(6 18 22 / 88%);
+  border: 1px solid rgb(121 230 202 / 22%);
+  border-radius: 3px;
+  font:
+    600 9px/1.2 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.wp-input:focus,
+.wp-select:focus {
+  border-color: rgb(121 230 202 / 55%);
+  outline: none;
+}
+.wp-input:disabled {
+  color: #4d6f6b;
+  cursor: not-allowed;
+}
+.wp-flag {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 1px 5px;
+  color: #ffd9a8;
+  background: rgb(84 58 12 / 78%);
+  border-radius: 2px;
+  font:
+    600 8px/1.4 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  font-style: normal;
+}
+/* 场景内编辑:手势说明与选中信息 */
+.gesture-list {
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.gesture-list li {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  padding: 2px 0;
+  color: #6f9c95;
+  font:
+    500 8.5px/1.45 ui-sans-serif,
+    system-ui,
+    sans-serif;
+}
+.gesture-list b {
+  flex: none;
+  min-width: 88px;
+  color: #9ff1dc;
+  font:
+    700 8.5px/1.45 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.scene-edit-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 7px 0;
+  padding: 5px 7px;
+  color: #7fb3aa;
+  background: rgb(8 22 26 / 66%);
+  border: 1px dashed rgb(121 230 202 / 22%);
+  border-radius: 4px;
+  font:
+    500 8.5px/1.4 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.scene-edit-status b {
+  color: #9ef4ff;
+}
+.scene-edit-status em {
+  margin-left: auto;
+  color: #ffc53d;
+  font-style: normal;
+}
+.progress-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  color: #9ff1dc;
+  font:
+    600 9px/1.3 ui-sans-serif,
+    system-ui,
+    sans-serif;
+}
+.progress-head em {
+  color: #6ff0d0;
+  font:
+    600 9px/1.3 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  font-style: normal;
+}
+.progress-bar {
+  height: 5px;
+  margin: 5px 0 7px;
+  overflow: hidden;
+  background: rgb(8 24 28 / 85%);
+  border: 1px solid rgb(121 230 202 / 18%);
+  border-radius: 3px;
+}
+.progress-bar > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #2f9d84, #6ff0d0);
+  transition: width 120ms linear;
+}
+.mission-meta {
+  display: grid;
+  gap: 4px 8px;
+  grid-template-columns: 1fr 1fr;
+}
+.mission-meta > div {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 3px 6px;
+  background: rgb(10 26 30 / 62%);
+  border: 1px solid rgb(121 230 202 / 12%);
+  border-radius: 3px;
+}
+.mission-meta span {
+  color: #5e8b84;
+  font:
+    400 8.5px/1.2 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.mission-meta strong {
+  color: #a9d8cd;
+  font:
+    600 9px/1.2 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
 }
 
 @media (max-width: 1400px) {

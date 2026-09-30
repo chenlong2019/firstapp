@@ -41,6 +41,8 @@ export interface GlbModelStats {
   materials: number
   textures: number
   animations: number
+  /** 骨节数量(GLTF 里被 skin.joints 引用的节点,GLTFLoader 会把它们建成 Bone) */
+  bones: number
   /** 模型包围盒尺寸(场景单位) */
   size: [number, number, number]
   radius: number
@@ -78,12 +80,35 @@ export interface GlbViewOptions {
   wireframe: boolean
 }
 
+/** 动画循环方式(与 three 的 LoopRepeat / LoopOnce / LoopPingPong 对应)。 */
+export type GlbAnimationLoopMode = 'repeat' | 'once' | 'pingpong'
+
 export interface GlbAnimationState {
   names: string[]
   index: number
   playing: boolean
   duration: number
   speed: number
+  /** 当前播放位置(秒),页面时间轴用 */
+  time: number
+  /** 单帧时长(秒):由轨道关键帧密度反推(烘焙动画即源帧率),逐帧步进用 */
+  frameStep: number
+  /** 循环方式 */
+  loop: GlbAnimationLoopMode
+}
+
+/** 骨架信息(页面"骨骼"面板用)。 */
+export interface GlbRigInfo {
+  /** 骨节数量 */
+  bones: number
+  /** 骨架根骨节名(每条骨链一个,如四条机臂各一条) */
+  roots: string[]
+  /** 骨架容器节点名(骨节最近的"非骨节"祖先节点去重,通常是 RIG_* 空物体) */
+  rigs: string[]
+  /** 是否含骨骼(含则页面才显示骨骼相关控件) */
+  hasSkeleton: boolean
+  /** 骨架辅助线是否显示 */
+  visible: boolean
 }
 
 export interface GlbLoadStatus {
@@ -112,6 +137,34 @@ const AMBIENT_LIGHT_MAX = 4
 const DIRECTIONAL_LIGHT_MAX = 6
 
 const WIREFRAME_COLOR = 0x9fe8ff
+
+// 骨架辅助线配色:骨节→子骨节为主色(亮青),骨节→它驱动的网格中心为暗色弱线
+const RIG_BONE_COLOR = new THREE.Color(0x64f0d2)
+const RIG_SPOKE_COLOR = new THREE.Color(0x2c6f68)
+/** 骨节处的小圆点半径(相对模型半径的比例) */
+const RIG_DOT_RATIO = 0.006
+
+/** 骨架辅助线的一段(每帧刷新顶点用)。 */
+type RigSegment =
+  | { kind: 'bone'; from: THREE.Object3D; to: THREE.Object3D }
+  | { kind: 'spoke'; from: THREE.Object3D; rest: THREE.Vector3 }
+  | { kind: 'axis'; from: THREE.Object3D; axis: 0 | 1 | 2 }
+
+// 骨架顶点刷新的复用临时量(每帧调用,不额外分配对象)
+const rigOrigin = new THREE.Vector3()
+const rigTarget = new THREE.Vector3()
+const rigAxisX = new THREE.Vector3()
+const rigAxisY = new THREE.Vector3()
+const rigAxisZ = new THREE.Vector3()
+
+/**
+ * 判断一个对象是否是"骨节"。
+ * GLTFLoader 会把 glTF 里被 skin.joints 引用的节点建成 THREE.Bone(见其 _markDefs),
+ * 所以 isBone 是权威依据;再补一条命名兜底,兼容只导出层级(没有 skin 定义)的刚性骨架。
+ */
+function isBoneLike(object: THREE.Object3D): boolean {
+  return (object as THREE.Bone).isBone === true || /(?:^|[_\-\s])bone$/i.test(object.name)
+}
 
 /** 点击判定:位移与时长阈值(超过则视为拖拽旋转视角,不触发选中)。 */
 const CLICK_MAX_DISTANCE_PX = 5
@@ -226,6 +279,25 @@ export class GlbViewer {
   private animationIndex = -1
   private animationPlaying = false
   private animationSpeed = 1
+  private animationLoop: GlbAnimationLoopMode = 'repeat'
+  /** 每帧向页面推送播放进度(时间轴平滑),页面不必等 400ms 轮询 */
+  onAnimationTick: ((state: GlbAnimationState) => void) | null = null
+
+  // —— 骨架辅助线(自绘:骨节 → 子骨节 / 骨节 → 它驱动的网格中心) ——
+  private rigGroup: THREE.Group | null = null
+  private rigLines: THREE.LineSegments | null = null
+  private rigDots: THREE.Points | null = null
+  /** 骨架可见性必须存状态字段:updateRig() 每帧按它写 group.visible */
+  private rigVisible = false
+  /** 参与连线的骨节(顺序即缓冲区顶点顺序) */
+  private rigBones: THREE.Object3D[] = []
+  /** 骨节 → 骨架根(祖先中没有骨节的骨节) */
+  private rigRoots: THREE.Object3D[] = []
+  /** 骨架线段的构成(每帧按它写顶点) */
+  private rigSegments: RigSegment[] = []
+  private rigLinePositions: THREE.BufferAttribute | null = null
+  /** 骨节局部短轴的长度(按模型尺寸定) */
+  private rigTickLength = 0.01
 
   // —— 爆炸图 ——
   private explodeParts: Array<{
@@ -457,6 +529,8 @@ export class GlbViewer {
     const box = new THREE.Box3().setFromObject(root)
     this.fitEnvironment(box)
     this.buildTree()
+    // 骨架要在统计与动画之前建好:统计要报骨节数,动画辅助线要在静止姿态下量测
+    this.buildRig()
     this.collectStats(gltf.animations.length)
     this.setupExplodeParts()
     this.setupAnimations(gltf.animations)
@@ -527,9 +601,11 @@ export class GlbViewer {
     let meshes = 0
     let triangles = 0
     let vertices = 0
+    let bones = 0
 
     this.model.traverse((object) => {
       nodes += 1
+      if (isBoneLike(object)) bones += 1
       const mesh = object as THREE.Mesh
       if (!mesh.isMesh && !(object as THREE.SkinnedMesh).isSkinnedMesh) return
       meshes += 1
@@ -561,6 +637,7 @@ export class GlbViewer {
       materials: materials.size,
       textures: textures.size,
       animations: animationCount,
+      bones,
       size: [size.x, size.y, size.z],
       radius: sphere.radius,
     }
@@ -595,6 +672,9 @@ export class GlbViewer {
       playing: this.animationPlaying,
       duration: this.activeAction?.getClip().duration ?? 0,
       speed: this.animationSpeed,
+      time: this.activeAction?.time ?? 0,
+      frameStep: this.getFrameStep(),
+      loop: this.animationLoop,
     }
   }
 
@@ -955,7 +1035,9 @@ export class GlbViewer {
 
   /**
    * 载入模型后采集爆炸单元:以模型根节点直接子级为单位(只有一个子级时下钻一层),
-   * 记录每个单元的静止位置与"单元中心 → 模型中心"方向。蒙皮网格会破坏骨骼绑定,不参与。
+   * 记录每个单元的静止位置与"单元中心 → 模型中心"方向。
+   * 含蒙皮网格或骨节的单元不参与:蒙皮会被位移破坏,而骨节的变换每帧由动画写回,
+   * 爆炸偏移会被下一帧覆盖(模型改成"骨节驱动"后,机臂那一支就属于这类,整支一起动是正确行为)。
    */
   private setupExplodeParts(): void {
     this.explodeParts = []
@@ -963,9 +1045,15 @@ export class GlbViewer {
     this.explodeMaxOffset = 0
     if (!this.model) return
 
+    const usable = (part: THREE.Object3D): boolean => !this.containsSkinnedMesh(part)
     let parts = [...this.model.children]
     if (parts.length <= 1) parts = parts.flatMap((child) => [...child.children])
-    parts = parts.filter((part) => !this.containsSkinnedMesh(part))
+    parts = parts.filter(usable)
+    // 排除骨架后若只剩一个单元(整机挂在单个"机身"节点下),再下钻一层拿到真正的部件
+    if (parts.length <= 1 && parts[0]) {
+      const deeper = [...parts[0].children].filter(usable)
+      if (deeper.length > 1) parts = deeper
+    }
     if (parts.length <= 1) return
 
     this.model.updateMatrixWorld(true)
@@ -1029,6 +1117,218 @@ export class GlbViewer {
   /** 模型是否支持爆炸图(可拆单元 ≥ 2)。 */
   isExplodeAvailable(): boolean {
     return this.explodeParts.length >= 2
+  }
+
+  // ————————————————————————————— 骨架辅助线 —————————————————————————————
+
+  /**
+   * 依据加载后的骨骼层级自绘骨架辅助线,三类线段:
+   * ① 骨节 → 子骨节(骨架主干,亮青);
+   * ② 骨节 → 它驱动的网格中心(暗色辐射线,静止姿态下量一次局部坐标,之后随骨节刚性跟随);
+   * ③ 每根骨节的局部 X/Y/Z 短轴(红绿蓝),用来直观看出骨骼在转动。
+   *
+   * 不用 THREE.SkeletonHelper:它只画 bone→bone,且把 root 当骨架根(这里骨架常与机身
+   * 并列挂在场景根下),也看不到"这根骨头带着哪些网格"。
+   */
+  private buildRig(): void {
+    this.disposeRig()
+    if (!this.model || !this.scene) return
+
+    const bones: THREE.Object3D[] = []
+    this.model.traverse((object) => {
+      if (isBoneLike(object)) bones.push(object)
+    })
+    if (bones.length === 0) return
+    this.model.updateMatrixWorld(true)
+
+    const segments: Array<
+      | { kind: 'bone'; from: THREE.Object3D; to: THREE.Object3D }
+      | { kind: 'spoke'; from: THREE.Object3D; rest: THREE.Vector3 }
+      | { kind: 'axis'; from: THREE.Object3D; axis: 0 | 1 | 2 }
+    > = []
+
+    bones.forEach((bone) => {
+      bone.children.forEach((child) => {
+        if (isBoneLike(child)) segments.push({ kind: 'bone', from: bone, to: child })
+      })
+      // 离这根骨节最近(中间没有别的骨节)的网格 = 它实际驱动的几何
+      const driven: THREE.Mesh[] = []
+      bone.traverse((object) => {
+        const mesh = object as THREE.Mesh
+        if (!mesh.isMesh && !(object as THREE.SkinnedMesh).isSkinnedMesh) return
+        if (this.nearestBoneAncestor(object) !== bone) return
+        driven.push(mesh)
+      })
+      driven.forEach((mesh) => {
+        const box = new THREE.Box3().setFromObject(mesh)
+        if (box.isEmpty()) return
+        const center = box.getCenter(new THREE.Vector3())
+        segments.push({ kind: 'spoke', from: bone, rest: bone.worldToLocal(center) })
+      })
+      segments.push({ kind: 'axis', from: bone, axis: 0 })
+      segments.push({ kind: 'axis', from: bone, axis: 1 })
+      segments.push({ kind: 'axis', from: bone, axis: 2 })
+    })
+
+    const axisColors: Record<0 | 1 | 2, THREE.Color> = {
+      0: new THREE.Color(0xff6b6b),
+      1: new THREE.Color(0x8effa1),
+      2: new THREE.Color(0x7fb2ff),
+    }
+    const positions = new Float32Array(segments.length * 2 * 3)
+    const colors = new Float32Array(segments.length * 2 * 3)
+    segments.forEach((segment, index) => {
+      const color =
+        segment.kind === 'bone'
+          ? RIG_BONE_COLOR
+          : segment.kind === 'spoke'
+            ? RIG_SPOKE_COLOR
+            : axisColors[segment.axis]
+      for (let vertex = 0; vertex < 2; vertex += 1) {
+        const offset = (index * 2 + vertex) * 3
+        colors[offset] = color.r
+        colors[offset + 1] = color.g
+        colors[offset + 2] = color.b
+      }
+    })
+
+    const geometry = new THREE.BufferGeometry()
+    const positionAttribute = new THREE.BufferAttribute(positions, 3)
+    positionAttribute.setUsage(THREE.DynamicDrawUsage)
+    geometry.setAttribute('position', positionAttribute)
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    // 动态顶点:关掉视锥剔除,免得包围盒不更新时整条链被裁掉
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Number.POSITIVE_INFINITY)
+
+    const material = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      depthTest: false, // 骨架做成"透视"效果,被机身挡住也能看见
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.9,
+      toneMapped: false,
+    })
+    this.rigLines = new THREE.LineSegments(geometry, material)
+    this.rigLines.frustumCulled = false
+    this.rigLines.renderOrder = 5
+    this.rigGroup = new THREE.Group()
+    this.rigGroup.name = 'GLB_SkeletonHelper'
+    this.rigGroup.visible = this.rigVisible
+    this.rigGroup.add(this.rigLines)
+    this.scene.add(this.rigGroup)
+
+    this.rigBones = bones
+    this.rigRoots = bones.filter((bone) => {
+      let parent = bone.parent
+      while (parent) {
+        if (isBoneLike(parent)) return false
+        parent = parent.parent
+      }
+      return true
+    })
+    this.rigSegments = segments
+    this.rigLinePositions = positionAttribute
+
+    const size = new THREE.Box3().setFromObject(this.model).getSize(new THREE.Vector3())
+    this.rigTickLength = Math.max(size.length() * 0.02, 0.0005)
+    this.updateRig()
+  }
+
+  /** 沿父级链找最近的骨节祖先(自身不算)。 */
+  private nearestBoneAncestor(object: THREE.Object3D): THREE.Object3D | null {
+    let current = object.parent
+    while (current) {
+      if (isBoneLike(current)) return current
+      current = current.parent
+    }
+    return null
+  }
+
+  /** 每帧刷新骨架顶点(可见性由状态字段统一应用,不可见时不做任何计算)。 */
+  private updateRig(): void {
+    if (!this.rigGroup) return
+    this.rigGroup.visible = this.rigVisible
+    if (!this.rigVisible || !this.rigLinePositions || !this.model) return
+
+    // 动画写的是骨骼的局部变换,这里先把世界矩阵刷到当前姿态再取点
+    this.model.updateMatrixWorld(true)
+    const array = this.rigLinePositions.array as Float32Array
+    const tick = this.rigTickLength
+    let cursor = 0
+    const write = (x: number, y: number, z: number): void => {
+      array[cursor] = x
+      array[cursor + 1] = y
+      array[cursor + 2] = z
+      cursor += 3
+    }
+
+    this.rigSegments.forEach((segment) => {
+      const matrix = segment.from.matrixWorld
+      rigOrigin.setFromMatrixPosition(matrix)
+      write(rigOrigin.x, rigOrigin.y, rigOrigin.z)
+      if (segment.kind === 'bone') {
+        rigTarget.setFromMatrixPosition(segment.to.matrixWorld)
+        write(rigTarget.x, rigTarget.y, rigTarget.z)
+      } else if (segment.kind === 'spoke') {
+        rigTarget.copy(segment.rest).applyMatrix4(matrix)
+        write(rigTarget.x, rigTarget.y, rigTarget.z)
+      } else {
+        matrix.extractBasis(rigAxisX, rigAxisY, rigAxisZ)
+        const axis = segment.axis === 0 ? rigAxisX : segment.axis === 1 ? rigAxisY : rigAxisZ
+        write(rigOrigin.x + axis.x * tick, rigOrigin.y + axis.y * tick, rigOrigin.z + axis.z * tick)
+      }
+    })
+
+    this.rigLinePositions.needsUpdate = true
+  }
+
+  private disposeRig(): void {
+    if (this.rigLines) {
+      this.rigLines.geometry.dispose()
+      toMaterialList(this.rigLines.material).forEach((material) => material.dispose())
+      this.rigGroup?.remove(this.rigLines)
+      this.rigLines = null
+    }
+    if (this.rigGroup) {
+      this.scene?.remove(this.rigGroup)
+      this.rigGroup = null
+    }
+    this.rigBones = []
+    this.rigRoots = []
+    this.rigSegments = []
+    this.rigLinePositions = null
+  }
+
+  /** 骨架辅助线开关。 */
+  setSkeletonVisible(visible: boolean): void {
+    this.rigVisible = visible
+    this.updateRig()
+  }
+
+  isSkeletonVisible(): boolean {
+    return this.rigVisible
+  }
+
+  getRigInfo(): GlbRigInfo {
+    const rigs: string[] = []
+    this.rigRoots.forEach((bone) => {
+      let parent = bone.parent
+      while (parent && isBoneLike(parent)) parent = parent.parent
+      const name = parent?.name || '骨架'
+      if (!rigs.includes(name)) rigs.push(name)
+    })
+    return {
+      bones: this.rigBones.length,
+      roots: this.rigRoots.map((bone) => bone.name || '骨架'),
+      rigs,
+      hasSkeleton: this.rigBones.length > 0,
+      visible: this.rigVisible,
+    }
+  }
+
+  /** 是否含骨骼(含则页面才显示骨骼相关控件)。 */
+  hasSkeleton(): boolean {
+    return this.rigBones.length > 0
   }
 
   // ————————————————————————————— 光照 —————————————————————————————
@@ -1120,9 +1420,21 @@ export class GlbViewer {
     this.animationIndex = -1
     this.animationPlaying = false
     this.activeAction = null
-    if (this.mixer) this.mixer.stopAllAction()
+    if (this.mixer) {
+      this.mixer.stopAllAction()
+      this.mixer.removeEventListener('finished', this.handleActionFinished)
+      this.mixer.uncacheRoot(this.mixer.getRoot())
+    }
     this.mixer = clips.length > 0 && this.model ? new THREE.AnimationMixer(this.model) : null
+    if (this.mixer) {
+      // LoopOnce 播完后 three 只是停住,自己不发状态;补一条事件让页面按钮回到"播放"
+      this.mixer.addEventListener('finished', this.handleActionFinished)
+    }
     if (clips.length > 0) this.playAnimation(0)
+  }
+
+  private readonly handleActionFinished = (): void => {
+    this.animationPlaying = false
   }
 
   playAnimation(index: number): void {
@@ -1135,17 +1447,85 @@ export class GlbViewer {
     this.activeAction = action
     this.animationIndex = index
     this.animationPlaying = true
+    this.applyLoopMode()
+    this.mixer.update(0)
+  }
+
+  /** 当前 clip 的单帧时长:取关键帧最密的轨道反推(烘焙动画等于源帧率)。 */
+  getFrameStep(): number {
+    const clip = this.activeAction?.getClip() ?? this.clips[this.animationIndex]
+    if (!clip || clip.duration <= 0) return 1 / 30
+    let maxKeys = 2
+    clip.tracks.forEach((track) => {
+      maxKeys = Math.max(maxKeys, track.times.length)
+    })
+    return clip.duration / (maxKeys - 1)
   }
 
   setAnimationPlaying(playing: boolean): void {
     if (!this.activeAction) return
+    if (playing) {
+      const duration = this.activeAction.getClip().duration
+      // 单次播放在结尾停住(clampWhenFinished)后再点播放 = 从头来一遍;
+      // 中途暂停时不能 reset,否则会丢掉当前进度
+      if (this.activeAction.time >= duration - 1e-4) this.activeAction.reset()
+      this.activeAction.paused = false
+    }
     this.animationPlaying = playing
     this.activeAction.paused = !playing
+    this.mixer?.update(0)
   }
 
   setAnimationSpeed(speed: number): void {
     this.animationSpeed = speed
     if (this.activeAction) this.activeAction.setEffectiveTimeScale(speed)
+  }
+
+  /**
+   * 跳到指定时间(秒)。写 action.time 后用 update(0) 求值一次:
+   * 暂停状态下也能立刻把骨骼摆到目标姿态(时间轴拖拽 / 单帧步进都靠它)。
+   */
+  seek(time: number): void {
+    if (!this.activeAction) return
+    const duration = this.activeAction.getClip().duration
+    this.activeAction.time = THREE.MathUtils.clamp(time, 0, duration)
+    this.mixer?.update(0)
+  }
+
+  /** 逐帧步进(自动暂停,和视频播放器一致)。 */
+  stepFrame(direction: number): void {
+    if (!this.activeAction) return
+    const step = this.getFrameStep()
+    this.setAnimationPlaying(false)
+    this.seek(this.activeAction.time + Math.sign(direction) * step)
+  }
+
+  /** 循环方式:循环 / 单次(停在末帧)/ 往返(折叠↔展开来回)。 */
+  setLoopMode(mode: GlbAnimationLoopMode): void {
+    this.animationLoop = mode
+    this.applyLoopMode()
+  }
+
+  private applyLoopMode(): void {
+    const action = this.activeAction
+    if (!action) return
+    if (this.animationLoop === 'once') {
+      action.setLoop(THREE.LoopOnce, 1)
+      action.clampWhenFinished = true
+    } else if (this.animationLoop === 'pingpong') {
+      action.setLoop(THREE.LoopPingPong, Number.POSITIVE_INFINITY)
+      action.clampWhenFinished = false
+    } else {
+      action.setLoop(THREE.LoopRepeat, Number.POSITIVE_INFINITY)
+      action.clampWhenFinished = false
+    }
+  }
+
+  /** 从头播放当前 clip。 */
+  restartAnimation(): void {
+    if (!this.activeAction) return
+    this.activeAction.time = 0
+    this.setAnimationPlaying(true)
   }
 
   // ————————————————————————————— 主循环 —————————————————————————————
@@ -1161,6 +1541,11 @@ export class GlbViewer {
 
       this.updateHover()
       if (this.mixer && this.animationPlaying) this.mixer.update(delta)
+      // 骨架辅助线要在 mixer 之后刷新,否则量到的是上一帧的姿态
+      this.updateRig()
+      if (this.mixer && this.activeAction && this.animationPlaying) {
+        this.onAnimationTick?.(this.getAnimationState())
+      }
       this.controls?.update()
       if (!this.scene || !this.camera) return
       if (this.postEffects) this.postEffects.pipeline.render()
@@ -1215,9 +1600,17 @@ export class GlbViewer {
     textures.forEach((texture) => texture.dispose())
     this.scene?.remove(this.model)
     this.model = null
+    if (this.mixer) {
+      this.mixer.removeEventListener('finished', this.handleActionFinished)
+      this.mixer.stopAllAction()
+      this.mixer.uncacheRoot(this.mixer.getRoot())
+    }
     this.mixer = null
     this.clips = []
     this.activeAction = null
+    this.animationPlaying = false
+    this.animationIndex = -1
+    this.disposeRig()
     this.explodeParts = []
     this.explodeAmount = 0
     this.stats = null
