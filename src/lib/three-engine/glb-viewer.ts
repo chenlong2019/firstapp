@@ -11,6 +11,8 @@
  */
 import * as THREE from 'three'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
+import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js'
+import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js'
 import {
   displayNameOf,
   loadModelFromFiles,
@@ -18,6 +20,10 @@ import {
   ModelLoadError,
 } from './model-loaders'
 import type { LoadedModel, ModelFormat } from './model-loaders'
+import { auditScene } from './model-audit'
+import type { AuditReport } from './model-audit'
+import { optimizeGlb, warmUpOptimizer } from './model-optimize'
+import type { OptimizeOptions, OptimizeResult } from './model-optimize'
 import { THREEViewer } from './three-viewer'
 import {
   PostEffects,
@@ -28,6 +34,9 @@ import {
 import type { BloomSettings, HoverOutlineSettings, OutlineSettings } from './post-effects'
 import type { WebGPURenderer } from 'three/webgpu'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+
+/** 可导出的格式。obj / stl 是纯几何格式,材质与动画会丢失。 */
+export type ModelExportFormat = 'glb' | 'gltf' | 'obj' | 'stl'
 
 /** 部件类型:仅用于模型树的图标与文案区分。 */
 export type GlbNodeKind =
@@ -288,6 +297,10 @@ export class GlbViewer {
   private idByObject = new WeakMap<THREE.Object3D, number>()
   private nextId = 0
   private stats: GlbModelStats | null = null
+  /** 原始文件字节(仅 glb/gltf 有):压缩与"省了多少"的对比基准 */
+  private sourceBytes: Uint8Array | null = null
+  /** 当前模型的体检报告,惰性计算;换模型或手动刷新时置空 */
+  private audit: AuditReport | null = null
 
   // —— 高亮状态(选中与悬停都走后渲染描边,不修改材质) ——
   private selectedId: number | null = null
@@ -575,6 +588,9 @@ export class GlbViewer {
     this.scene.add(root)
     this.model = root
     this.fileName = fileName
+    // 源字节与体检报告都描述"当前这个模型",换模型必须一起重置
+    this.sourceBytes = model.sourceBytes ?? null
+    this.audit = null
 
     root.updateMatrixWorld(true)
     const box = new THREE.Box3().setFromObject(root)
@@ -793,7 +809,136 @@ export class GlbViewer {
     return segments.join(' / ')
   }
 
-  // ————————————————————————————— 导出 —————————————————————————————
+  // ————————————————————————————— 体检 —————————————————————————————
+
+  /**
+   * 模型体检报告:几何 / 材质 / 纹理 / 骨骼 / 动画 / 绘制调用,外加问题清单与评分。
+   *
+   * 惰性计算并缓存。drawcall 取的是渲染器**上一帧**的实测值,所以应当在页面进入 ready
+   * 状态(已渲染若干帧)之后再调用;载入瞬间调用会量到 0。
+   */
+  getAudit(): AuditReport | null {
+    if (!this.model) return null
+    if (!this.audit) {
+      this.audit = auditScene({
+        scene: this.model,
+        renderInfo: this.renderer ? { calls: this.renderer.info.render.calls } : undefined,
+      })
+    }
+    return this.audit
+  }
+
+  /** 丢弃缓存的体检结果并重算(渲染稳定后想刷新 drawcall 时用)。 */
+  refreshAudit(): AuditReport | null {
+    this.audit = null
+    return this.getAudit()
+  }
+
+  /** 预热压缩依赖(展开体检面板时调用,免得点导出才开始下载那几百 KB)。失败静默。 */
+  warmUpOptimizer(): void {
+    void warmUpOptimizer().catch(() => undefined)
+  }
+
+  // ————————————————————————————— 压缩与导出 —————————————————————————————
+
+  /**
+   * 压缩当前模型。
+   *
+   * 基准优先用**原始文件字节** —— 只有这样才能如实回答"把这个模型从 8MB 压到 4MB";
+   * 把 scene 重新序列化会得到另一个体积,压缩比就失去意义。非 glb/gltf 的输入(如 fbx)
+   * 本来就没有原始 glb 字节,退回"先把当前场景导出为 glb 再压"。
+   */
+  async optimizeModel(options: OptimizeOptions): Promise<OptimizeResult> {
+    const source = this.sourceBytes ?? (await this.exportSceneBytes('glb'))
+    if (!source) throw new Error('当前模型没有可压缩的数据')
+    return optimizeGlb(source, options)
+  }
+
+  /**
+   * 导出当前模型为指定格式并触发下载。
+   *
+   * gltf 用内嵌 base64 的写法,保证产出是单个自包含文件 —— 否则还要额外打包 .bin 与贴图目录,
+   * 对"拿一份能直接给别人的文件"这个诉求反而更麻烦。
+   */
+  async exportModel(format: ModelExportFormat): Promise<GlbExportResult | null> {
+    const model = this.model
+    if (!model) return null
+    const safeName = (this.fileName || 'model').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_')
+
+    try {
+      let blob: Blob
+
+      if (format === 'obj' || format === 'stl') {
+        const text = await this.withBaseMaterials(async () => {
+          const output =
+            format === 'obj'
+              ? new OBJExporter().parse(model)
+              : new STLExporter().parse(model)
+          return typeof output === 'string'
+            ? output
+            : new TextDecoder().decode(output as unknown as ArrayBuffer)
+        })
+        blob = new Blob([text], { type: 'text/plain' })
+      } else {
+        const output = await this.withBaseMaterials(() =>
+          new GLTFExporter().parseAsync(model, { binary: format === 'glb', onlyVisible: false }),
+        )
+        blob =
+          format === 'glb'
+            ? new Blob([output as ArrayBuffer], { type: 'model/gltf-binary' })
+            : new Blob([JSON.stringify(output)], { type: 'model/gltf+json' })
+      }
+
+      const fileName = `${safeName}.${format}`
+      this.downloadBlob(blob, fileName)
+      return { fileName, bytes: blob.size }
+    } catch (error) {
+      console.warn(`[GlbViewer] 导出 ${format} 失败:`, error)
+      return null
+    }
+  }
+
+  /** 把字节流下载成文件(压缩产物走这里),返回写入的字节数。 */
+  downloadBytes(bytes: Uint8Array, fileName: string, mime = 'model/gltf-binary'): number {
+    const blob = new Blob([bytes as unknown as BlobPart], { type: mime })
+    this.downloadBlob(blob, fileName)
+    return blob.size
+  }
+
+  /** 把当前场景序列化为指定格式的字节(不触发下载),用作压缩的兜底基准。 */
+  private async exportSceneBytes(format: 'glb' | 'gltf'): Promise<Uint8Array | null> {
+    const model = this.model
+    if (!model) return null
+    return this.withBaseMaterials(async () => {
+      const output = await new GLTFExporter().parseAsync(model, {
+        binary: format === 'glb',
+        onlyVisible: false,
+      })
+      if (format === 'glb') return new Uint8Array(output as ArrayBuffer)
+      return new TextEncoder().encode(JSON.stringify(output))
+    })
+  }
+
+  /** 临时切回基材质执行导出(线框材质不该被写进文件),结束后还原。 */
+  private async withBaseMaterials<T>(task: () => Promise<T>): Promise<T> {
+    const wasWireframe = this.viewOptions.wireframe
+    if (wasWireframe) this.applyBaseMaterials()
+    try {
+      return await task()
+    } finally {
+      if (wasWireframe) this.refreshModelMaterials()
+    }
+  }
+
+  /** 触发浏览器下载,并延迟回收 object URL(立刻回收会让下载拿不到数据)。 */
+  private downloadBlob(blob: Blob, fileName: string): void {
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = fileName
+    anchor.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000)
+  }
 
   /**
    * 把当前选中节点(含整个子树)导出为 GLB 文件并触发浏览器下载。
@@ -1736,6 +1881,9 @@ export class GlbViewer {
     // 隔离状态随模型一起失效:快照里的对象即将被释放,留着会对已释放节点写 visible
     this.isolatedId = null
     this.isolateSnapshot = null
+    // 要在"没有模型就 return"之前清:这两个字段属于当前模型而非整个场景
+    this.sourceBytes = null
+    this.audit = null
     if (!this.model) return
     const materials = new Set<THREE.Material>()
     const textures = new Set<THREE.Texture>()

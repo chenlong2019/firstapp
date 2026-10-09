@@ -721,7 +721,12 @@ export function mountRace(host: HTMLElement = document.body): RaceSceneHandle {
   const loadDrone = () => {
     const loading = drone.load()
     syncDronePanel()
-    void loading.then(syncDronePanel)
+    void loading.then(() => {
+      syncDronePanel()
+      // 无人机模型是此刻才进场景的,先编译它的着色器再让玩家看见(见 warmUpShaders)。
+      // 运行期不挂起主循环 —— 会变成画面冻住。
+      void warmUpShaders(false)
+    })
   }
 
   // —— 接管时的跟随相机:吊在无人机后上方,平滑跟随 ——
@@ -1630,6 +1635,13 @@ export function mountRace(host: HTMLElement = document.body): RaceSceneHandle {
   }
 
   const frame = (now: number) => {
+    // 着色器预热期间只保活 rAF、不出帧(见 warmUpShaders 的说明):一次绘制就会触发
+    // 同步的首次使用查询,把驱动正在做的并行编译打断成串行等待。
+    if (warmUpHoldFrames) {
+      previous = now
+      if (running) rafId = requestAnimationFrame(frame)
+      return
+    }
     // A heavy frame (the water shader plus two mirror renders) can take a fifth of
     // a second. Clamping the frame delta to 0.1 s made the simulation run at a
     // fraction of real time on such a machine - the car crawled and appeared not to
@@ -1809,6 +1821,73 @@ export function mountRace(host: HTMLElement = document.body): RaceSceneHandle {
     render()
   }
 
+  /**
+   * 预热着色器期间是否挂起主循环(只保活 rAF、不出帧)。
+   *
+   * 载入阶段必须挂起:驱动拿到一批 program 后需要一个不被打断的窗口并行编译,而主循环
+   * 里任何一次绘制都会触发「材质首次使用」查询,那个查询是同步等 program 链接完成的 ——
+   * 它会把并行编译退化成串行等待,正好抵消预热的意义。
+   * 运行期不要挂起:那时画面已经在跑,挂起等于让玩家盯着静止的屏幕。
+   */
+  let warmUpHoldFrames = false
+
+  /**
+   * 是否在撤遮罩前预编译着色器。`?warmup=0` 关掉它,复现改动前的行为(遮罩一撤、
+   * 首帧为每个材质同步等一次编译),用于量化这条改动的作用。
+   */
+  const warmUpEnabled = params.get('warmup') !== '0'
+
+  /**
+   * 预热着色器:把整场景的材质 program 一次性交给驱动编译,再渲染一帧把
+   * uniform/attribute 的首次查询做掉。
+   *
+   * three 是「某个材质第一次被绘制」才编译它的 program 的,而这次编译会同步阻塞主线程
+   * (gl.getProgramInfoLog 要等驱动把 program 链接完才返回)。本场景一共 80 个 program,
+   * 其中车模型自己就带 35 个材质;不预热它们就会在遮罩撤掉后的那一帧里一个接一个串行阻塞
+   * —— 实测(无头 Chromium)单次最长 885 ms、累计 4.2 s,表现为「载入条刚消失、画面
+   * 直接冻住好几秒」。
+   *
+   * 用 renderer.compileAsync:支持 KHR_parallel_shader_compile 时它让驱动在后台线程并行
+   * 编译、异步轮询就绪状态,主线程全程不阻塞 —— 那种环境下这次预热还会顺带压短总时长。
+   * 这么做的收益是把编译挪到遮罩底下(文案「编译着色器…」)。
+   *
+   * ⚠️ 反过来,在**不支持**该扩展的环境里额外「等一会儿让驱动并行编译」是无效的:实测
+   * 预热前多等 600 / 2500 ms,预热耗时反而从 4.7 s 劣化到 36.5 / 22.0 s —— 驱动并不会
+   * 提前把 program 编好,多等只是白等。所以这里不设任何「等待窗口」。
+   *
+   * ⚠️ 代价与收益要讲清楚:总时长不变(编译工作量没变),变的是**卡顿发生的位置** ——
+   * 从「遮罩消失之后」挪到了「遮罩底下」。实测(无头)onFirstUse 的峰值从亮相后的
+   * 7s/8s/9s(371/367/171 ms)变成遮罩中的 6-11s,亮相之后不再有任何编译阻塞。
+   *
+   * ⚠️ program 的缓存键包含灯光数量与阴影状态,所以必须在灯光、阴影全部就位之后再预热,
+   * 否则预热出来的程序会被判定为过期而重编。
+   *
+   * @param holdFrames 预热期间是否挂起主循环(载入阶段 true,运行期 false)
+   */
+  const warmUpShaders = async (holdFrames: boolean): Promise<void> => {
+    // 场景已卸载就别再碰渲染器了(上下文已丢失)
+    if (!running) return
+    const previousHold = warmUpHoldFrames
+    warmUpHoldFrames = holdFrames
+    let timer = 0
+    try {
+      // compileAsync 在缺少并行编译扩展时要靠轮询,理论上可能迟迟不 ready;加超时兜底,
+      // 免得遮罩永远撤不掉。
+      await Promise.race([
+        renderer.compileAsync(scene, camera),
+        new Promise<void>((resolve) => {
+          timer = window.setTimeout(resolve, 20000)
+        }),
+      ])
+    } catch (error) {
+      // 预热失败不该拦住场景:照常撤遮罩,让首帧自己去编译
+      console.warn('[race] 着色器预热失败', error)
+    } finally {
+      window.clearTimeout(timer)
+      warmUpHoldFrames = previousHold
+    }
+  }
+
   /** 载入并装配场景主体:车辆模型、车灯、后视镜、车身动画、角色与自动驾驶,完成后隐藏载入遮罩 */
   const boot = async () => {
     try {
@@ -1867,8 +1946,11 @@ export function mountRace(host: HTMLElement = document.body): RaceSceneHandle {
       })
       carBody.setDoors(Object.fromEntries(doorsFromLink.map((id) => [id, true])))
 
-      // The character is 14 MB, so it is fetched in the background while the scene
-      // settles: the button has to be instant the first time it is pressed.
+      // The character is 15 MB, so it is fetched in the background while the scene
+      // settles: the button has to be instant the first time it is pressed. It starts
+      // only here, after the car has finished — the car is the model that gates being
+      // able to drive, so it gets the connection to itself first. Its materials are
+      // precompiled when it lands, so it does not hitch the frame it appears on.
       const boardingRig = rig as CarRig
       boardingCameraHeld = false
       boarding = createBoarding({
@@ -1892,7 +1974,10 @@ export function mountRace(host: HTMLElement = document.body): RaceSceneHandle {
             boardingCamera()
           }
         })
-      void boarding.load()
+      // 人物与无人机在车之后才开始下载(车模型是关键路径,先让它独占带宽),所以这里
+      // 不用等它们;各自到位时再预热一次着色器即可(见 loadDrone 与下面的 boarding.load)。
+      void boarding.load().then(() => void warmUpShaders(false))
+      if (drone.state().enabled) loadDrone()
       // The tree belongs to the car that just loaded: a new model means new nodes.
       modelTree?.setRoot(rig.root)
       {
@@ -1922,8 +2007,9 @@ export function mountRace(host: HTMLElement = document.body): RaceSceneHandle {
         spawnLateral: map.spawnLateral,
       })
       vehicle.syncRig(rig)
+      // 无人机模型(14 MB)在车之后载入(见上面的 loadDrone);这里先让它按车辆状态
+      // 摆好跟随机位,模型到位后再露面。
       drone.update(0, vehicle.state)
-      if (drone.state().enabled) loadDrone()
       // The autopilot only reads the vehicle and the track, so it is built once
       // here and switched on and off with `autopilotOn`.
       autopilot = createAutopilot({ track, vehicle, brakeDeceleration: VEHICLE.brakeDeceleration })
@@ -1970,6 +2056,16 @@ export function mountRace(host: HTMLElement = document.body): RaceSceneHandle {
           const mesh = object as THREE.Mesh
           if (mesh.isMesh && pattern.test(mesh.name)) mesh.visible = true
         })
+      }
+      // 装配完了,但着色器一次都没编译过。先预热、再真渲染一帧,最后才撤遮罩 ——
+      // 顺序反了就是「遮罩刚消失、画面立刻冻住好几秒」(见 warmUpShaders)。
+      // `?warmup=0` 跳过预热,复现改动前的行为,用于对比测量。
+      if (warmUpEnabled) {
+        status.textContent = '编译着色器…'
+        await warmUpShaders(true)
+        // 预热等待期间用户可能已经切走路由(dispose 已把上下文销毁)
+        if (!running) return
+        render()
       }
       status.hidden = true
       hud()

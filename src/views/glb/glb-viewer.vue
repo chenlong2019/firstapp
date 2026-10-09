@@ -425,6 +425,100 @@
         </dl>
       </section>
 
+      <section v-if="audit" class="section">
+        <h3>
+          模型体检
+          <span class="audit-grade" :class="`grade-${audit.grade.toLowerCase()}`">
+            {{ audit.grade }} · {{ audit.score }}
+          </span>
+        </h3>
+
+        <dl class="info-grid">
+          <div>
+            <dt>三角面</dt>
+            <dd>{{ formatCount(audit.metrics.triangles) }}</dd>
+          </div>
+          <div>
+            <dt>顶点</dt>
+            <dd>{{ formatCount(audit.metrics.vertices) }}</dd>
+          </div>
+          <div>
+            <dt>材质</dt>
+            <dd>{{ audit.metrics.materials }}</dd>
+          </div>
+          <div>
+            <dt>贴图</dt>
+            <dd>{{ audit.metrics.textures }}</dd>
+          </div>
+          <div>
+            <dt>纹理显存</dt>
+            <dd>{{ audit.metrics.textureMemoryMB }}MB</dd>
+          </div>
+          <div>
+            <dt>绘制调用</dt>
+            <dd>{{ audit.metrics.drawCalls }}</dd>
+          </div>
+        </dl>
+
+        <ul class="audit-list">
+          <li v-for="issue in audit.issues" :key="issue.id" :class="`level-${issue.level}`">
+            <span class="audit-mark"></span>
+            <div class="audit-text">
+              <p class="audit-title">{{ issue.title }}</p>
+              <p class="audit-detail">{{ issue.detail }}</p>
+            </div>
+          </li>
+        </ul>
+
+        <button class="wide-button ghost" type="button" @click="refreshAudit">重新体检</button>
+      </section>
+
+      <section v-if="audit" class="section">
+        <h3>压缩与导出</h3>
+
+        <div class="segmented three">
+          <button
+            v-for="option in OPTIMIZE_OPTIONS"
+            :key="option.value"
+            type="button"
+            :class="{ active: optimizeAlgorithm === option.value }"
+            :title="option.hint"
+            @click="optimizeAlgorithm = option.value"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+
+        <button class="wide-button primary" type="button" :disabled="optimizing" @click="runOptimize">
+          {{ optimizing ? '压缩中…' : '压缩模型' }}
+        </button>
+
+        <div v-if="optimizeResult" class="optimize-card">
+          <div class="optimize-compare">
+            <span>{{ formatBytes(optimizeResult.originalBytes) }}</span>
+            <span class="arrow">→</span>
+            <strong>{{ formatBytes(optimizeResult.optimizedBytes) }}</strong>
+            <span class="saved">省 {{ (optimizeResult.savedRatio * 100).toFixed(1) }}%</span>
+          </div>
+          <div class="optimize-bar">
+            <div
+              class="optimize-bar-fill"
+              :style="{ width: `${Math.max(2, (1 - optimizeResult.savedRatio) * 100)}%` }"
+            ></div>
+          </div>
+          <button class="wide-button" type="button" @click="downloadOptimized">
+            下载压缩后的 glb
+          </button>
+        </div>
+
+        <p class="audit-note">导出 obj / stl 会丢失材质与动画</p>
+        <div class="export-grid">
+          <button v-for="item in EXPORT_FORMATS" :key="item" type="button" @click="exportModel(item)">
+            {{ item }}
+          </button>
+        </div>
+      </section>
+
       <section v-if="nodeInfo" class="section">
         <h3>选中部件</h3>
         <p class="selected-name">{{ nodeInfo.name }}</p>
@@ -682,7 +776,10 @@ import type {
   GlbTreeNode,
   GlbViewOptions,
   LightSettings,
+  ModelExportFormat,
 } from '../../lib/three-engine/glb-viewer'
+import type { AuditReport } from '../../lib/three-engine/model-audit'
+import type { OptimizeAlgorithm, OptimizeResult } from '../../lib/three-engine/model-optimize'
 import {
   DEFAULT_BLOOM_SETTINGS,
   DEFAULT_OUTLINE_SETTINGS,
@@ -788,6 +885,19 @@ const LOOP_CYCLE: GlbAnimationLoopMode[] = ['repeat', 'pingpong', 'once']
 /** 播放速度快捷档位(倍速)。 */
 const SPEED_PRESETS = [0.25, 0.5, 1, 2]
 
+/**
+ * 压缩档位。三档都只动几何与资源组织、不改外观:
+ * 强度越高体积越小,但 meshopt 产物需要解码器支持(three 的 MeshoptDecoder 已具备)。
+ */
+const OPTIMIZE_OPTIONS: Array<{ value: OptimizeAlgorithm; label: string; hint: string }> = [
+  { value: 'none', label: '仅清理', hint: '去掉冗余节点与重复资源,精度不变' },
+  { value: 'quantize', label: '量化', hint: '坐标/法线降到 16 位精度,肉眼几乎无差' },
+  { value: 'meshopt', label: 'meshopt', hint: '几何压缩,体积最小(推荐)' },
+]
+
+/** 可导出的格式。 */
+const EXPORT_FORMATS: ModelExportFormat[] = ['glb', 'gltf', 'obj', 'stl']
+
 /** 泛光 Bloom 各滑杆的量程配置。 */
 const BLOOM_ROWS: Array<{
   key: BloomSettingsKey
@@ -850,6 +960,11 @@ const isolatedId = ref<number | null>(null)
 const locatingId = ref<number | null>(null)
 /** 整模统计 / 选中节点详情 / 实时帧率 / 是否正在拖拽文件。 */
 const stats = ref<GlbModelStats | null>(null)
+const audit = ref<AuditReport | null>(null)
+const optimizeAlgorithm = ref<OptimizeAlgorithm>('meshopt')
+const optimizing = ref(false)
+const optimizeResult = ref<OptimizeResult | null>(null)
+let auditTimer: number | undefined
 const nodeInfo = ref<GlbNodeInfo | null>(null)
 const fps = ref(0)
 const dragging = ref(false)
@@ -1073,6 +1188,8 @@ onUnmounted(() => {
   locateTimer = undefined
   if (exportNoteTimer !== undefined) window.clearTimeout(exportNoteTimer)
   exportNoteTimer = undefined
+  if (auditTimer !== undefined) window.clearTimeout(auditTimer)
+  auditTimer = undefined
   viewer?.destroy()
   viewer = null
 })
@@ -1087,6 +1204,10 @@ function syncFromViewer(): void {
   locatingId.value = null
   nodeInfo.value = null
   keyword.value = ''
+  // 换模型后旧的体检结果与压缩产物都失效
+  audit.value = null
+  optimizeResult.value = null
+  scheduleAudit()
   // 换模型会连同隔离状态一起失效(旧快照已随模型释放)
   syncIsolate()
   Object.assign(animation, viewer.getAnimationState())
@@ -1460,6 +1581,59 @@ async function exportSelectedPart(): Promise<void> {
   } finally {
     exporting.value = false
   }
+}
+
+/**
+ * 排一次延后的体检。
+ *
+ * 体检里的「绘制调用」取的是渲染器上一帧的实测值,载入刚完成时还没渲染够帧,
+ * 立刻算会得到 0 —— 所以延后一拍;顺手预热压缩依赖(几百 KB),免得点导出才开始下载。
+ */
+function scheduleAudit(): void {
+  if (auditTimer !== undefined) window.clearTimeout(auditTimer)
+  auditTimer = window.setTimeout(() => {
+    auditTimer = undefined
+    if (!viewer) return
+    audit.value = viewer.refreshAudit()
+    viewer.warmUpOptimizer()
+  }, 500)
+}
+
+/** 手动重新体检(渲染稳定后刷新绘制调用)。 */
+function refreshAudit(): void {
+  if (!viewer) return
+  audit.value = viewer.refreshAudit()
+}
+
+/** 压缩当前模型。压缩比以原始文件为基准,产物先留在内存里,由用户决定是否下载。 */
+async function runOptimize(): Promise<void> {
+  if (!viewer || optimizing.value) return
+  optimizing.value = true
+  optimizeResult.value = null
+  try {
+    optimizeResult.value = await viewer.optimizeModel({ algorithm: optimizeAlgorithm.value })
+  } catch (error) {
+    console.warn('[glb] 压缩失败:', error)
+    showExportNote('压缩失败,详见控制台', true)
+  } finally {
+    optimizing.value = false
+  }
+}
+
+/** 下载上一步的压缩产物。 */
+function downloadOptimized(): void {
+  if (!viewer || !optimizeResult.value) return
+  const base = (stats.value?.fileName ?? 'model').replace(/\.[^.]+$/, '')
+  const written = viewer.downloadBytes(optimizeResult.value.bytes, `${base}.optimized.glb`)
+  showExportNote(`已导出压缩模型(${formatBytes(written)})`)
+}
+
+/** 导出整个模型为指定格式。obj / stl 是纯几何格式,不携带材质与动画。 */
+async function exportModel(format: ModelExportFormat): Promise<void> {
+  if (!viewer) return
+  const result = await viewer.exportModel(format)
+  if (result) showExportNote(`已导出 ${result.fileName}(${formatBytes(result.bytes)})`)
+  else showExportNote('导出失败,详见控制台', true)
 }
 
 /** 播放 / 暂停切换,并回读引擎状态。 */
@@ -2690,6 +2864,160 @@ function onDrop(event: DragEvent): void {
     Consolas,
     monospace;
   letter-spacing: 0.08em;
+}
+/* —— 模型体检 —— */
+.audit-grade {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font:
+    700 9px/1.4 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.audit-grade.grade-a {
+  color: #06201d;
+  background: #79e6ca;
+}
+.audit-grade.grade-b {
+  color: #04222b;
+  background: #7cd9ff;
+}
+.audit-grade.grade-c {
+  color: #3a2a05;
+  background: #ffd98a;
+}
+.audit-grade.grade-d {
+  color: #3a1410;
+  background: #ff9b8a;
+}
+.audit-list {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.audit-list li {
+  display: grid;
+  grid-template-columns: 6px 1fr;
+  gap: 6px;
+  align-items: start;
+}
+.audit-mark {
+  width: 6px;
+  height: 6px;
+  margin-top: 3px;
+  background: #638f88;
+  border-radius: 50%;
+}
+.audit-list li.level-error .audit-mark {
+  background: #ff8f7a;
+}
+.audit-list li.level-warn .audit-mark {
+  background: #ffd98a;
+}
+.audit-list li.level-info .audit-mark {
+  background: #7cd9ff;
+}
+.audit-list li.level-good .audit-mark {
+  background: #79e6ca;
+}
+.audit-title {
+  margin: 0;
+  color: #d8fff5;
+  font:
+    500 9px/1.35 ui-sans-serif,
+    system-ui,
+    sans-serif;
+}
+.audit-list li.level-good .audit-title {
+  color: #9ff1dc;
+}
+.audit-detail {
+  margin: 1px 0 0;
+  color: #638f88;
+  font:
+    400 8.5px/1.4 ui-sans-serif,
+    system-ui,
+    sans-serif;
+}
+.audit-note {
+  margin: 8px 0 3px;
+  color: #638f88;
+  font:
+    400 8.5px/1.4 ui-sans-serif,
+    system-ui,
+    sans-serif;
+}
+
+/* —— 压缩结果 —— */
+.optimize-card {
+  margin-top: 6px;
+  padding: 7px;
+  background: rgb(11 30 33 / 70%);
+  border: 1px solid rgb(121 230 202 / 18%);
+  border-radius: 4px;
+}
+.optimize-compare {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  color: #bfe8de;
+  font:
+    500 9px/1.3 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.optimize-compare strong {
+  color: #79e6ca;
+  font-size: 10px;
+}
+.optimize-compare .arrow {
+  color: #638f88;
+}
+.optimize-compare .saved {
+  margin-left: auto;
+  color: #ffe6a3;
+}
+.optimize-bar {
+  height: 4px;
+  margin: 6px 0 2px;
+  overflow: hidden;
+  background: rgb(30 63 65 / 70%);
+  border-radius: 2px;
+}
+.optimize-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #79e6ca, #7cd9ff);
+}
+.segmented.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+.export-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.export-grid button {
+  padding: 4px 0;
+  color: #bfe8de;
+  background: rgb(30 63 65 / 55%);
+  border: 1px solid rgb(121 230 202 / 22%);
+  border-radius: 3px;
+  font:
+    500 9px/1.2 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  cursor: pointer;
+  transition: 0.15s ease;
+}
+.export-grid button:hover {
+  color: #eafff8;
+  background: rgb(48 92 92 / 65%);
 }
 .file-input {
   display: none;

@@ -114,6 +114,12 @@ export interface LoadedModel {
   /** 展示用文件名 */
   fileName: string
   format: ModelFormat
+  /**
+   * glb / gltf 的原始文件字节。
+   * 压缩与"省了多少"必须基于原始文件 —— 把 scene 重新导出会产生不同的基准,
+   * 压缩比就失去意义。其他格式不保留(压缩时先用 GLTFExporter 转成 glb)。
+   */
+  sourceBytes?: Uint8Array
 }
 
 /** 加载失败原因分类,便于页面给出不同的提示文案。 */
@@ -339,7 +345,18 @@ export async function loadModelFromUrl(
   }
   const manager = new THREE.LoadingManager()
   const mtlUrl = format === 'obj' ? await probeSiblingMtl(url) : null
-  return loadByFormat(format, url, manager, mtlUrl, name, options.onProgress)
+  const model = await loadByFormat(format, url, manager, mtlUrl, name, options.onProgress)
+  // 再取一份原始字节用于压缩(浏览器 HTTP 缓存会命中,不会真的下载两次)。
+  // 取不到不算加载失败:调用方会退回"导出当前场景再压缩"。
+  if (format === 'glb' || format === 'gltf') {
+    try {
+      const response = await fetch(url)
+      if (response.ok) model.sourceBytes = new Uint8Array(await response.arrayBuffer())
+    } catch {
+      // 忽略:源字节属可选增强
+    }
+  }
+  return model
 }
 
 /**
@@ -394,7 +411,12 @@ export async function loadModelFromFiles(
     manager.onLoad = release
     window.setTimeout(release, 30_000)
     const mtlUrl = format === 'obj' ? findMtlUrl(resources) : null
-    return await loadByFormat(format, mainUrl, manager, mtlUrl, main.name, options.onProgress)
+    const model = await loadByFormat(format, mainUrl, manager, mtlUrl, main.name, options.onProgress)
+    // 读 File 不依赖 blob URL,放在 release 之前取,免得回收后又被读一次
+    if (format === 'glb' || format === 'gltf') {
+      model.sourceBytes = new Uint8Array(await main.arrayBuffer())
+    }
+    return model
   } catch (error) {
     release()
     throw error
