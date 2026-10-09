@@ -57,6 +57,12 @@ release-*/
 # 端到端验证用的临时构建产物(verify-race-page 跑 vite preview 用)
 dist-race-check/
 
+# 在线 demo 的部署目录(dist 副本 + 静态服务器,由 scripts/prepare-deploy.mjs 生成)
+.deploy-demo/
+
+# WorkBuddy 发布应用的内部标记文件
+.wbapp_*.genie
+
 # 大体积本地演示数据,代码未引用
 roads_demo_beijing.gpkg
 

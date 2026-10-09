@@ -1,135 +1,131 @@
 # ThreeViewer
 
-This template should help get you started developing with Vue 3 in Vite.
+基于 **Vue 3 + Three.js(WebGPU) + Cesium** 的 3D / GIS 可视化工具集:模型查看、无人机仿真、海上竞速、车型交互,全部跑在浏览器里,无需安装。
 
-## Recommended IDE Setup
+**🌐 在线体验(点开即玩,无需安装):https://three-viewer-demo.app.workbuddy.host/**
 
-[VS Code](https://code.visualstudio.com/) + [Vue (Official)](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
+![海湾竞速](docs/screenshots/race-follow.jpg)
 
-## Recommended Browser Setup
+## 功能一览
 
-- Chromium-based browsers (Chrome, Edge, Brave, etc.):
-  - [Vue.js devtools](https://chromewebstore.google.com/detail/vuejs-devtools/nhdogjmejiglipccpnnnanhbledajbpd)
-  - [Turn on Custom Object Formatter in Chrome DevTools](http://bit.ly/object-formatters)
-- Firefox:
-  - [Vue.js devtools](https://addons.mozilla.org/en-US/firefox/addon/vue-js-devtools/)
-  - [Turn on Custom Object Formatter in Firefox DevTools](https://fxdx.dev/firefox-devtools-custom-object-formatters/)
+### 🧊 GLB 模型查看器 · `/glb`
 
-## Type Support for `.vue` Imports in TS
+通用的 3D 模型查看器,也是整个项目的起点:
 
-TypeScript cannot handle type information for `.vue` imports by default, so we replace the `tsc` CLI with `vue-tsc` for type checking. In editors, we need [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) to make the TypeScript language service aware of `.vue` types.
+- **多格式加载**:glb / gltf / fbx / obj / stl / ply / dae,支持把 `.mtl`、贴图、`.bin` 等外部资源一并拖入
+- **场景树**:逐节点显隐、只看当前部件(隔离显示)、部件定位
+- **骨骼查看与骨骼动画**:骨架辅助线(骨节链 / 驱动指向 / 局部坐标轴)、动画时间轴、逐帧步进、循环方式、变速播放 —— 模型带骨骼时自动出现,不带时自动隐藏
+- **模型体检**:三角形数、材质、动画等统计信息;相机缩放范围随模型尺度自适应(厘米级 FBX 也能正常取景缩放)
 
-## Customize configuration
+![GLB 查看器与骨骼动画](docs/screenshots/glb-skeleton.jpg)
 
-See [Vite Configuration Reference](https://vite.dev/config/).
+### 🌊 海湾竞速 · `/race`
 
-## Project Setup
+跨海大桥场景的驾驶 + 无人机双体验:
+
+- 车辆沿车道自动巡航,可随时切手动驾驶
+- **无人机接管**:按键整体从车辆移交无人机(起降 / 平移 / 偏航 / 云台俯仰 / 返航),交还后立刻回到车辆
+- 跟拍 ↔ 机载 FPV 视角一键切换,雨天、海面、桥梁光影
+
+### 🚁 DJI 飞行沙盒 · `/dji`
+
+DJI Mini 4 Pro 的"数字孪生"练习场:
+
+- 完整起飞流程:自检 → 起飞检查表 → 电机启动 → 一键起飞
+- 真实感 HUD:高度 / 速度 / 距离、姿态仪、罗盘、电池、图传信号
+- 机械细节:机臂折叠、桨叶差速、云台俯仰、状态灯
+- 智能航向、急停悬停、失控保护等飞行逻辑
+
+![DJI 飞行沙盒](docs/screenshots/dji-sandbox.jpg)
+
+### 🚗 Tesla 车型交互 · `/tesla`
+
+Model 3 的可交互展厅:四门开合、后备箱、大灯 / 尾灯 / 氛围灯、行驶与转向、多机位镜头,基于带骨骼的整车模型驱动。
+
+![Tesla 车型交互](docs/screenshots/tesla-interactive.jpg)
+
+### 🗺 道路数据演示 · `/roads`
+
+Cesium + PostGIS 的 GIS 套件:动态 MVT 瓦片、道路搜索定位、点 / 线 / 面空间查询。需要本地 PostgreSQL 服务(见下文「道路 MVT 演示」)。
+
+### 📦 three-engine 库示例 · `/lib-demo`
+
+核心能力沉淀为独立 npm 库 `three-engine`(纯逻辑仿真层与渲染装配层分离),此页面是各模块的可运行示例与接入指南。
+
+## 技术栈
+
+| 层 | 技术 |
+| --- | --- |
+| 框架 | Vue 3 + TypeScript + Vite |
+| 渲染 | Three.js(WebGPURenderer) |
+| GIS | CesiumJS + PostGIS |
+| 桌面 | Electron |
+| 质量 | Vitest + Playwright(全页面无头回归,数百项断言) |
+
+**工程亮点**
+
+- **仿真与渲染分层**:`drone-sim`(零依赖纯逻辑)→ `drone-rig`(模型机械)→ `drone-world`(环境)→ `drone-fly`(装配),逻辑可脱离浏览器单独跑
+- **可复用库**:`npm run build:lib` 把 three-engine 打包为独立 npm 包(UMD + ESM)
+- **回归体系**:每个功能页面都有对应的 Playwright 无头回归脚本(`scripts/verify-*.js`),合计数百项断言
+
+## 快速上手
 
 ```sh
 npm install
+npm run dev          # 开发服务器
+npm run build        # 类型检查 + 生产构建
+npm run test:unit    # Vitest 单测
+npm run electron:build   # 打包 Windows 桌面应用(release/*.exe)
 ```
 
-### 道路 MVT 演示
+### 在线 demo 部署
 
-先在 `roads_demo` 数据库中执行 `server/search-index.sql`，为道路名称、道路编号和 OSM ID 建立搜索索引。可以使用 pgAdmin 的 Query Tool 执行，也可以在安装了 `psql` 的环境中运行：
+线上版本由 `dist/` 构建产物 + 一个带 SPA 回退的静态服务器组成(`/roads` 需要数据库,线上不提供):
+
+```sh
+npx vite build                   # 1. 构建
+node scripts/prepare-deploy.mjs  # 2. 生成自包含部署目录 .deploy-demo/
+# 3. 上传 .deploy-demo/ 到任意 Node 托管平台,启动命令 node server.mjs
+```
+
+## 道路 MVT 演示(本地)
+
+先在 `roads_demo` 数据库执行 `server/search-index.sql` 建立搜索索引:
 
 ```sh
 psql -h 127.0.0.1 -p 5432 -U postgres -d roads_demo -f server/search-index.sql
 ```
 
-启动道路服务和前端：
+启动道路服务和前端:
 
 ```sh
+# PowerShell
 $env:PGPASSWORD="123456"
 npm run server
 npm run dev -- --host 127.0.0.1 --port 5175
 ```
 
-打开 `http://127.0.0.1:5175/roads` 后，可以按道路名称或道路编号搜索道路。点击搜索结果会自动定位地图、添加高亮，并显示道路属性；直接点击地图上的道路仍然使用最近道路查询。
+打开 `http://127.0.0.1:5175/roads`:支持按名称 / 编号搜索道路并定位高亮;点、线、面空间查询(单击加点、双击完成、右键取消),结果分批加载并保持高亮。
 
-空间查询支持点、线、面。线和面单击加点，移动鼠标预览，双击完成，右键取消。红色查询图形保留在地图上，蓝色表示命中的道路。线与面边界沿 Cesium 的椭球测地线按不超过 500 米加密，绘制与数据库相交计算使用同一组坐标。
+服务接口:
 
-空间查询结果每批加载 200 条，自动取完全部匹配结果，并显示总数与加载进度；列表每页显示 100 条，翻页不影响已加载道路的高亮。点击“清除”会中止后续请求并移除查询图形及结果。`POST /roads/query` 接收 `geometry`、`limit`、`offset`，返回 `results`、`count`（本批数量）、`total`（总数）和 `hasMore`。
+- `GET /tiles/roads/{z}/{x}/{y}.pbf` — 动态 MVT 瓦片
+- `GET /roads/search?q=名称或编号&limit=10` — 道路搜索
+- `GET /roads/nearest?lon=116.4&lat=39.9` — 最近道路
+- `POST /roads/query` — GeoJSON 空间查询
+- `GET /health` — 数据库连接检查
 
-道路服务提供以下接口：
+## 打包桌面应用(Electron)
 
-- `GET /tiles/roads/{z}/{x}/{y}.pbf`：动态 MVT 瓦片
-- `GET /roads/search?q=道路名称或编号&limit=10`：道路搜索
-- `GET /roads/nearest?lon=116.4&lat=39.9`：查询坐标附近道路
-- `POST /roads/query`：提交 GeoJSON `Point`、`LineString` 或 `Polygon`，查询相交道路
-- `GET /health`：数据库连接检查
-
-### Compile and Hot-Reload for Development
+前端是绝对路径 + web history 路由 + Cesium Worker/WASM,`file://` 下无法运行,因此主进程会起一个只监听 `127.0.0.1` 的静态服务再打开窗口:
 
 ```sh
-npm run dev
+npm run electron:build   # release/ThreeViewer Setup 0.0.0.exe(安装包)+ 免安装版
+npm run electron:pack    # 只出免安装目录 release/win-unpacked/(更快)
 ```
 
-### Type-Check, Compile and Minify for Production
+打包细节(防杀软锁死 asar 的一次性工作目录、图标替换、排障环境变量)见 `scripts/package.mjs` 与 `electron/main.cjs` 内注释。
 
-```sh
-npm run build
-```
+## License
 
-### Run Unit Tests with [Vitest](https://vitest.dev/)
-
-```sh
-npm run test:unit
-```
-
-### Run End-to-End Tests with [Playwright](https://playwright.dev)
-
-```sh
-# Install browsers for the first run
-npx playwright install
-
-# When testing on CI, must build the project first
-npm run build
-
-# Runs the end-to-end tests
-npm run test:e2e
-# Runs the tests only on Chromium
-npm run test:e2e -- --project=chromium
-# Runs the tests of a specific file
-npm run test:e2e -- tests/example.spec.ts
-# Runs the tests in debug mode
-npm run test:e2e -- --debug
-```
-
-### Lint with [ESLint](https://eslint.org/)
-
-```sh
-npm run lint
-```
-
-## 打包桌面应用（Electron → Windows exe）
-
-前端资源全部是绝对路径（`/assets`、`/Cesium`），路由是 web history 模式，Cesium 还依赖 Worker/WASM —— 这些在 `file://` 下都会失败。因此主进程（`electron/main.cjs`）会启动一个只监听 `127.0.0.1` 的静态服务，把 `dist` 当作站点根目录，再用 `http://127.0.0.1:<随机端口>` 打开窗口。
-
-```sh
-# 1. 打包（内部先 vite build，再 electron-builder）
-npm run electron:build
-# 产物：release/ThreeViewer Setup 0.0.0.exe（安装包）、release/ThreeViewer 0.0.0.exe（免安装）
-
-# 2. 只出免安装目录，调试用（更快）
-npm run electron:pack        # → release/win-unpacked/ThreeViewer.exe
-
-# 3. 开发调试：先 npm run dev 起 vite，再以开发地址启动窗口
-#    PowerShell: $env:ELECTRON_START_URL="http://localhost:15176"; npm run electron:dev
-```
-
-打包入口是 `scripts/package.mjs`：构建到一次性工作目录 `release/.work-<时间戳>`，把安装包挪到 `release/` 根目录后立刻删除工作目录。这么做是因为部分杀软/索引器会把刚写出的 `win-unpacked/resources/app.asar` 锁死（EBUSY/EPERM），几分钟后连目录都删不掉、改不了名 —— 直接跑 electron-builder 会让 `release/` 逐渐堆积无法删除的目录。若某个残留目录已被锁死，重启后删除即可。
-
-应用图标是 `build/icon.ico`（256/128/64/48/32/16 多尺寸，线框立方体），换图标直接覆盖该文件后重新打包即可；网页 favicon 在 `public/favicon.ico`，由同一套图标生成。
-
-常用排障环境变量（正常桌面不需要）：
-
-| 变量 | 作用 |
-| --- | --- |
-| `APP_DEBUG_PORT=9333` | 开启远程调试端口，便于用 CDP 连接打包产物排查 |
-| `APP_DISABLE_GPU=1` | 关闭硬件加速（老驱动/远程桌面） |
-| `APP_CHROMIUM_FLAGS="--no-sandbox --use-angle=swiftshader"` | 追加 Chromium 开关；虚拟机里 GPU 进程反复崩溃导致 `GPU process isn't usable. Goodbye.` 时用这组可强制软件渲染 |
-
-若构建时报 `EPERM/EBUSY rename ... win-unpacked.tmp`：说明机器上有杀软或残留进程占用解压目录。可先清掉 `release/` 下的残留（必要时重启），或预先把 Electron 发行包解压到某目录，再用 `npx electron-builder --config.electronDist=<解压目录>` 打包（该路径会走“复制文件”而不是“解压+改名”）。
-
-要在 exe 里同时跑本地 Postgres 瓦片服务（`server/index.mjs`），可在 `electron/main.cjs` 中用 `child_process.fork` 拉起它。
+[MIT](LICENSE)
