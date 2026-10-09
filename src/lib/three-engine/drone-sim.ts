@@ -37,8 +37,10 @@ export const DRONE_SPEC = {
   gimbalYawRange: 5,
 } as const
 
+/** 飞行挡位:平稳 C / 普通 N / 运动 S */
 export type FlightMode = 'cine' | 'normal' | 'sport'
 
+/** 单个挡位的性能参数:限速(水平/升降)、姿态倾角与加减速、偏航角速度 */
 export interface ModeSpec {
   label: string
   horizontalSpeed: number
@@ -84,10 +86,12 @@ export const FLIGHT_MODES: Record<FlightMode, ModeSpec> = {
   },
 }
 
+/** 挡位列表(供下拉框渲染的稳定顺序) */
 export const FLIGHT_MODE_LIST: Array<{ key: FlightMode; label: string }> = (
   Object.keys(FLIGHT_MODES) as FlightMode[]
 ).map((key) => ({ key, label: FLIGHT_MODES[key].label }))
 
+/** 飞行阶段:上电自检 → 预热 → 待机 → 起飞 → 飞行/航线 → 返航/降落 → 停桨/失效 */
 export type FlightPhase =
   | 'powerOff'
   | 'selfCheck'
@@ -102,6 +106,7 @@ export type FlightPhase =
   | 'emergency'
   | 'stopped'
 
+/** 阶段的中文标签(界面显示用) */
 export const PHASE_LABELS: Record<FlightPhase, string> = {
   powerOff: '未上电',
   selfCheck: '开机自检',
@@ -117,14 +122,17 @@ export const PHASE_LABELS: Record<FlightPhase, string> = {
   stopped: '已停桨',
 }
 
+/** 定位来源:GNSS / 视觉 / 姿态模式(无定位) */
 export type PositionSource = 'gps' | 'vision' | 'atti'
 
+/** 定位来源的中文标签 */
 export const POSITION_SOURCE_LABELS: Record<PositionSource, string> = {
   gps: 'GNSS 卫星定位',
   vision: '视觉定位',
   atti: '姿态模式(无定位)',
 }
 
+/** 四通道摇杆量,每通道取值 -1~1(松杆为 0) */
 export interface StickState {
   /** 左杆上下:升降 -1~1(正 = 上升) */
   throttle: number
@@ -136,6 +144,7 @@ export interface StickState {
   roll: number
 }
 
+/** 摇杆回中(全零) */
 export const NEUTRAL_STICK: StickState = { throttle: 0, yaw: 0, pitch: 0, roll: 0 }
 
 /** 故障注入:测试沙盒里用来复现各种真机异常 */
@@ -156,6 +165,7 @@ export interface FaultFlags {
   obstacleAvoidanceOff: boolean
 }
 
+/** 全部故障关闭(正常飞行) */
 export const NO_FAULTS: FaultFlags = {
   gnssLost: false,
   compassError: false,
@@ -166,6 +176,7 @@ export const NO_FAULTS: FaultFlags = {
   obstacleAvoidanceOff: false,
 }
 
+/** 沙盒可调参数(限高限距、风、电量阈值、失效动作、时间倍速) */
 export interface SimConfig {
   /** 限高(AGL,米) */
   maxAltitude: number
@@ -187,6 +198,7 @@ export interface SimConfig {
   timeScale: number
 }
 
+/** 出厂默认参数:限高 120 m(合规上限)、限距 500 m、无风、实时 */
 export const DEFAULT_CONFIG: SimConfig = {
   maxAltitude: 120,
   maxDistance: 500,
@@ -228,6 +240,7 @@ export type MissionPathMode = 'straight' | 'curved'
 /** 任务结束动作,对齐真机 WaypointMissionFinishedAction */
 export type MissionFinishAction = 'hover' | 'rth' | 'land'
 
+/** 航线任务的全局设置 */
 export interface MissionConfig {
   /** 巡航速度(m/s):航点未单独指定速度时用它 */
   autoSpeed: number
@@ -239,14 +252,17 @@ export interface MissionConfig {
   loop: boolean
 }
 
+/** 任务状态:未执行 / 执行中 / 已暂停 */
 export type MissionStatus = 'idle' | 'running' | 'paused'
 
+/** 任务状态的中文标签 */
 export const MISSION_STATUS_LABELS: Record<MissionStatus, string> = {
   idle: '未执行',
   running: '执行中',
   paused: '已暂停',
 }
 
+/** 任务阶段的中文标签 */
 export const MISSION_STAGE_LABELS: Record<MissionStage, string> = {
   idle: '待执行',
   'depart-climb': '垂直调整到首航点高度',
@@ -266,19 +282,14 @@ export const MISSION_STAGE_LABELS: Record<MissionStage, string> = {
  * 之后才进入常规的 goto / hover 推进。
  */
 export type MissionStage =
-  | 'idle'
-  | 'depart-climb'
-  | 'depart-cruise'
-  | 'depart-settle'
-  | 'depart-align'
-  | 'goto'
-  | 'hover'
+  'idle' | 'depart-climb' | 'depart-cruise' | 'depart-settle' | 'depart-align' | 'goto' | 'hover'
 
 /** 是否为「启航段」阶段(首航点的分段机动) */
 export function isMissionDepartStage(stage: MissionStage): boolean {
   return stage.startsWith('depart-')
 }
 
+/** 出厂默认任务设置:巡航 6 m/s、机头自动指向下一航点、直线过点、完成后悬停 */
 export const DEFAULT_MISSION_CONFIG: MissionConfig = {
   autoSpeed: 6,
   headingMode: 'auto',
@@ -343,8 +354,10 @@ export interface MissionSnapshot {
   config: MissionConfig
 }
 
+/** 事件日志级别 */
 export type EventLevel = 'info' | 'warn' | 'error' | 'success'
 
+/** 一条事件日志 */
 export interface SimEvent {
   id: number
   time: number
@@ -352,6 +365,7 @@ export interface SimEvent {
   text: string
 }
 
+/** 轴对齐包围盒(AABB)障碍物,坐标与飞行位置同一套约定 */
 export interface ObstacleBox {
   name: string
   minX: number
@@ -364,6 +378,7 @@ export interface ObstacleBox {
   solid: boolean
 }
 
+/** 当前帧的避障探测结果(机身坐标系六向) */
 export interface ObstacleReport {
   /** 六个方向的最近距离(米),null 表示该方向无障碍 */
   forward: number | null
@@ -378,6 +393,7 @@ export interface ObstacleReport {
   brakingDirection: 'forward' | 'backward' | 'left' | 'right' | 'up' | 'down' | null
 }
 
+/** 起飞前检查项 */
 export interface ChecklistItem {
   id: string
   label: string
@@ -387,6 +403,7 @@ export interface ChecklistItem {
   blocking: boolean
 }
 
+/** 单向快照:界面/回放读取的全部遥测字段(数组字段已复制,改它不影响仿真) */
 export interface DroneSnapshot {
   phase: FlightPhase
   phaseLabel: string
@@ -458,7 +475,9 @@ const SELF_CHECK_SECONDS = 2.6
 const WARMUP_SECONDS = 2.4
 const RC_FAILSAFE_DELAY = 3
 const LOW_BATTERY_COUNTDOWN = 10
+/** 搜星速度(颗/秒) */
 const GNSS_ACQUIRE_RATE = 1.6
+/** 下视视觉可用的最高离地高度(米):再高就看不清地面纹理 */
 const VISION_MAX_ALTITUDE = 12
 /** 智能返航:机头与返航航向的夹角小于这个值才允许前进(度) */
 const RTH_ALIGN_TOLERANCE_DEG = 12
@@ -489,7 +508,8 @@ const MISSION_DEPART_SETTLE_TOLERANCE = 0.15
 /** 启航段:机头对准航线方向的到位容差(度) */
 const MISSION_DEPART_ALIGN_TOLERANCE = 2.5
 
-const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value))
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, value))
 const lerp = (from: number, to: number, t: number): number => from + (to - from) * t
 const degToRad = (deg: number): number => (deg * Math.PI) / 180
 const radToDeg = (rad: number): number => (rad * 180) / Math.PI
@@ -500,6 +520,13 @@ function headingVector(headingDeg: number): { x: number; z: number } {
   return { x: Math.sin(rad), z: -Math.cos(rad) }
 }
 
+/**
+ * 飞控仿真内核(不依赖 three)。
+ *
+ * 持有全部飞行状态与可调参数:`step(dt)` 按时间片推进状态机、飞行、电池与失效保护;
+ * 外部通过 getter / `snapshot()` 只读遥测,通过 powerOn / autoTakeOff / setStick / startMission 等下达指令。
+ * 状态字段虽为 public,但正常路径应只经 step 与上述方法修改。
+ */
 export class DroneSim {
   config: SimConfig = { ...DEFAULT_CONFIG }
   faults: FaultFlags = { ...NO_FAULTS }
@@ -604,10 +631,12 @@ export class DroneSim {
   }
 
   get airborne(): boolean {
+    // 离地 5 cm 以上且未断电才算空中(触地/未上电都不算)
     return this.position.y > 0.05 && this.phase !== 'powerOff'
   }
 
   get motorsOn(): boolean {
+    // 电机负载 >2% 视为桨叶已转动(怠速也在转)
     return this.motorLoad > 0.02
   }
 
@@ -624,20 +653,28 @@ export class DroneSim {
     const stateOfCharge = this.batteryPercent / 100
     return (
       DRONE_SPEC.batteryEmptyVoltage +
-      (DRONE_SPEC.batteryFullVoltage - DRONE_SPEC.batteryEmptyVoltage) * Math.pow(stateOfCharge, 0.55)
+      (DRONE_SPEC.batteryFullVoltage - DRONE_SPEC.batteryEmptyVoltage) *
+        // 0.55:锂电放电曲线的经验指数,让低电量段电压掉得更快,贴近真机表现
+        Math.pow(stateOfCharge, 0.55)
     )
   }
 
   /** 放电电流:按当前功率 / 近似电压估算 */
   get batteryCurrent(): number {
+    // 6.4 V:除法的电压下限,防止电量趋零时电流发散
     return this.currentPowerWatts / Math.max(6.4, this.openCircuitVoltage)
   }
 
   /** 端电压 = 开路电压 − 内阻压降 */
   get batteryVoltage(): number {
-    return Math.max(6, this.openCircuitVoltage - this.batteryCurrent * DRONE_SPEC.batteryInternalResistance)
+    return Math.max(
+      6,
+      // 下限 6 V:避免低电量时内阻压降把端电压算成负数
+      this.openCircuitVoltage - this.batteryCurrent * DRONE_SPEC.batteryInternalResistance,
+    )
   }
 
+  /** 当前定位来源:GNSS(≥6 星且指南针正常)→ 视觉 → 姿态模式 */
   get positionSource(): PositionSource {
     if (this.faults.gnssLost) {
       return this.visionAvailable ? 'vision' : 'atti'
@@ -647,9 +684,11 @@ export class DroneSim {
     return 'atti'
   }
 
+  /** 当前总功耗(W):怠速 + 悬停(含平飞增益)+ 爬升功耗,再乘风速系数 */
   get currentPowerWatts(): number {
     if (this.phase === 'powerOff') return 0
     const airSpeed = Math.hypot(this.velocity.x, this.velocity.z)
+    // 16 m/s:平飞满速参考(运动挡极速);>1 表示超速(仅姿态模式可能出现)
     const speedRatio = clamp(airSpeed / 16, 0, 1.2)
     const spinning = this.motorLoad > 0.02
     let watts =
@@ -658,20 +697,24 @@ export class DroneSim {
         (spinning ? 1 : 0.05) *
         (1 + DRONE_SPEC.levelSpeedPowerGain * speedRatio * speedRatio)
     watts += Math.max(0, this.velocity.y) * DRONE_SPEC.climbWattsPerMps
+    // 电机转动时的最低功耗下限 12 W
     if (spinning) watts = Math.max(watts, 12)
     // 逆风要保持位置需要更大的空气速度,额外耗电
+    // 30 m/s 为风速归一化上限、0.35 为最大额外功耗比例
     const windFactor = 1 + clamp(this.config.windSpeed / 30, 0, 1) * 0.35
     return watts * windFactor
   }
 
   /** 剩余可飞时间(分钟) */
   get remainingMinutes(): number {
+    // 用 12 W 下限兜底,避免待机功耗极小导致剩余时间虚高
     const watts = Math.max(this.currentPowerWatts, 12)
     return ((this.batteryPercent / 100) * DRONE_SPEC.batteryWh * 60) / watts
   }
 
   // ————————————————————————————— 操作指令 —————————————————————————————
 
+  /** 上电:重置飞行状态与电量并进入自检;受损时拒绝 */
   powerOn(): void {
     if (this.phase !== 'powerOff' && this.phase !== 'stopped') return
     if (this.damaged) {
@@ -685,6 +728,7 @@ export class DroneSim {
     this.velocity = { x: 0, y: 0, z: 0 }
     this.batteryUsedWh = 0
     this.batteryTemp = 25
+    // 上电即有 1 星,随后由 updateGnss 逐步搜星到目标数
     this.satellites = this.faults.gnssLost ? 0 : 1
     this.flightTime = 0
     this.altitudeMax = 0
@@ -692,6 +736,7 @@ export class DroneSim {
     this.pushEvent('info', '飞行器上电,开始系统自检')
   }
 
+  /** 关机:仅地面可用;顺带作废未起飞的航线任务 */
   powerOff(): void {
     if (this.airborne || this.phase === 'powerOff') return
     this.phase = 'powerOff'
@@ -738,6 +783,7 @@ export class DroneSim {
     return true
   }
 
+  /** 起飞:记录返航点并自动爬升到 1.2 米(需已启动电机) */
   takeOff(): boolean {
     if (this.phase !== 'motorsOn') return false
     this.phase = 'takingOff'
@@ -755,6 +801,7 @@ export class DroneSim {
     return this.takeOff()
   }
 
+  /** 触发自动降落(会先中止正在执行的航线任务) */
   startLanding(): boolean {
     if (!this.airborne && this.phase !== 'takingOff') return false
     if (this.phase === 'landing' || this.phase === 'emergency') return false
@@ -767,6 +814,7 @@ export class DroneSim {
     return true
   }
 
+  /** 触发智能返航(reason 用于日志与快照);返航优先级高于航线,会中止任务 */
   startRth(reason: string): boolean {
     if (!this.airborne) return false
     if (this.phase === 'rth') return false
@@ -774,8 +822,10 @@ export class DroneSim {
     this.abortMission('触发返航')
     this.phase = 'rth'
     this.phaseTime = 0
+    // 已在返航高度附近(差 <0.5 m)就直接巡航,否则先爬升
     this.rthStage = this.position.y < this.config.rthAltitude - 0.5 ? 'ascend' : 'cruise'
     this.rthReason = reason
+    // 1.2 s 内忽略摇杆,防止触发返航的那次打杆立刻把返航取消掉
     this.rthStickGrace = 1.2
     this.pushEvent('warn', `触发智能返航(${reason}),返航高度 ${this.config.rthAltitude} 米`)
     return true
@@ -835,7 +885,9 @@ export class DroneSim {
 
   // ————————————————————————————— 每帧推进 —————————————————————————————
 
+  /** 推进一个仿真时间片(dtSeconds 秒;负值不推进,过大的值会被夹到单步上限) */
   step(dtSeconds: number): void {
+    // 单步上限 0.1 s:后台标签页卡顿后一帧可能攒下很久,夹住避免积分出巨大位移
     const delta = clamp(dtSeconds, 0, 0.1)
     if (delta <= 0) return
     this.time += delta
@@ -882,6 +934,7 @@ export class DroneSim {
         break
       case 'takingOff': {
         this.motorLoad = lerp(this.motorLoad, 0.62, Math.min(1, delta * 3))
+        // 起飞爬升率固定 1.5 m/s
         this.position.y = Math.min(DRONE_SPEC.takeoffAltitude, this.position.y + 1.5 * delta)
         this.velocity.y = 1.5
         this.settleHorizontal(delta)
@@ -929,7 +982,9 @@ export class DroneSim {
     this.settleHorizontal(delta)
 
     if (this.landingStage === 'approach') {
-      const rate = this.position.y <= DRONE_SPEC.landingSlowAltitude ? 0.6 : this.modeSpec.descendSpeed
+      // 低于 2 m 改用 0.6 m/s 缓降,避免贴地时下冲过猛
+      const rate =
+        this.position.y <= DRONE_SPEC.landingSlowAltitude ? 0.6 : this.modeSpec.descendSpeed
       this.velocity.y = -rate
       this.position.y -= rate * delta
       if (this.position.y <= LANDING_HOLD_ALTITUDE_M) {
@@ -959,6 +1014,7 @@ export class DroneSim {
       this.position.y = 0
       this.velocity.y = 0
       this.landingTimer += delta
+      // 触地后停 1.2 s 再停桨,确认确实落稳
       if (this.landingTimer >= 1.2) {
         this.finishLanding()
       }
@@ -990,11 +1046,13 @@ export class DroneSim {
 
   private applyGravityFall(delta: number): void {
     this.velocity.y -= GRAVITY * delta
+    // 近似空气阻力:水平速度按指数衰减(0.4 为衰减系数)
     this.velocity.x *= 1 - Math.min(1, delta * 0.4)
     this.velocity.z *= 1 - Math.min(1, delta * 0.4)
     this.position.x += this.velocity.x * delta
     this.position.y += this.velocity.y * delta
     this.position.z += this.velocity.z * delta
+    // 坠落时机头前倾 25°
     this.tiltPitch = lerp(this.tiltPitch, 25, Math.min(1, delta * 2))
     if (this.position.y <= 0) {
       this.position.y = 0
@@ -1088,9 +1146,11 @@ export class DroneSim {
     // 垂直:GPS/视觉下松杆定高;姿态模式有轻微掉高
     const verticalInput = this.stick.throttle
     if (Math.abs(verticalInput) > 0.06) {
-      const rate = verticalInput > 0 ? verticalInput * spec.climbSpeed : verticalInput * spec.descendSpeed
+      const rate =
+        verticalInput > 0 ? verticalInput * spec.climbSpeed : verticalInput * spec.descendSpeed
       this.velocity.y += clamp(rate - this.velocity.y, -3 * delta, 3 * delta)
     } else {
+      // 姿态模式无定高:松杆仍以 -0.35 m/s 缓慢掉高
       const hold = source === 'atti' ? -0.35 : 0
       this.velocity.y += clamp(hold - this.velocity.y, -2 * delta, 2 * delta)
     }
@@ -1119,6 +1179,7 @@ export class DroneSim {
     const distance = this.distanceToHome
     this.distanceLimitReached = false
     if (distance > this.config.maxDistance) {
+      // 超距时沿返航点方向等比缩回,精确落到限距圆上
       const ratio = this.config.maxDistance / distance
       this.position.x = this.home.x + (this.position.x - this.home.x) * ratio
       this.position.z = this.home.z + (this.position.z - this.home.z) * ratio
@@ -1130,6 +1191,7 @@ export class DroneSim {
   }
 
   private applyYaw(delta: number): void {
+    // 电机异常时偏航权限降到 70%,与下面的被动自旋叠加
     const rate = this.stick.yaw * this.modeSpec.yawRateDeg * (this.faults.motorFailure ? 0.7 : 1)
     this.heading = (this.heading + rate * delta + 360) % 360
     if (this.faults.motorFailure) {
@@ -1158,6 +1220,7 @@ export class DroneSim {
       pitch += Math.sin(this.time * 2.1) * 1.6
       roll += Math.cos(this.time * 1.7) * 2.2
     }
+    // 地面待机时姿态回中更快(8),飞行中柔和些(3.2)
     const smoothing = this.phase === 'standby' ? 8 : 3.2
     this.tiltPitch = lerp(this.tiltPitch, pitch, Math.min(1, delta * smoothing))
     this.tiltRoll = lerp(this.tiltRoll, roll, Math.min(1, delta * smoothing))
@@ -1168,6 +1231,7 @@ export class DroneSim {
       this.motorLoad = lerp(this.motorLoad, 0, Math.min(1, delta * 8))
       return
     }
+    // 5 m/s 为爬升归一化参考、16 m/s 为平飞参考;0.42 是悬停基准负载
     const climbFactor = clamp(this.velocity.y / 5, -0.3, 1)
     const speedFactor = clamp(Math.hypot(this.velocity.x, this.velocity.z) / 16, 0, 1)
     const target = clamp(0.42 + climbFactor * 0.45 + speedFactor * 0.28, 0.2, 1)
@@ -1186,6 +1250,7 @@ export class DroneSim {
       return
     }
 
+    // 返航高度下限 2 m,避免把返航高度设得过低时贴地飞
     const targetAltitude = Math.max(this.config.rthAltitude, 2)
     if (this.rthStage === 'ascend') {
       const delta2 = targetAltitude - this.position.y
@@ -1209,6 +1274,7 @@ export class DroneSim {
       } else {
         const dirX = dx / distance
         const dirZ = dz / distance
+        // 由方向向量反算罗盘角:atan2(x, -z),0°=北、90°=东
         const targetHeading = radToDeg(Math.atan2(dirX, -dirZ))
         const headingError = Math.abs(((targetHeading - this.heading + 540) % 360) - 180)
         this.velocity.y = lerp(this.velocity.y, 0, Math.min(1, delta * 2))
@@ -1219,6 +1285,7 @@ export class DroneSim {
           this.velocity.z = lerp(this.velocity.z, 0, Math.min(1, delta * 8))
           this.heading = this.turnToward(this.heading, targetHeading, RTH_YAW_RATE_DEG * delta)
         } else {
+          // 接近返航点时按距离比例减速,最低 2 m/s
           const cruiseSpeed = Math.min(spec.horizontalSpeed, Math.max(2, distance * 0.5))
           this.velocity.x = lerp(this.velocity.x, dirX * cruiseSpeed, Math.min(1, delta * 1.6))
           this.velocity.z = lerp(this.velocity.z, dirZ * cruiseSpeed, Math.min(1, delta * 1.6))
@@ -1249,6 +1316,7 @@ export class DroneSim {
   }
 
   private turnToward(current: number, target: number, maxDelta: number): number {
+    // 角度差归一到 (-180, 180];+540 是为了让 JS 的 % 对负数也给出正余数
     let difference = ((target - current + 540) % 360) - 180
     difference = clamp(difference, -maxDelta, maxDelta)
     return (current + difference + 360) % 360
@@ -1329,6 +1397,7 @@ export class DroneSim {
     waypoint.z = this.home.z + offsetZ * scale
   }
 
+  /** 增量更新航线任务的全局设置(只覆盖传入的字段) */
   setMissionConfig(patch: Partial<MissionConfig>): void {
     this.missionConfig = { ...this.missionConfig, ...patch }
   }
@@ -1559,6 +1628,7 @@ export class DroneSim {
     )
     const aligned =
       this.missionConfig.headingMode !== 'auto' || headingError <= RTH_ALIGN_TOLERANCE_DEG
+    // 刹车距离 = v²/(2a);+0.6 m 是留出的余量
     const brakeDistance = (cruise * cruise) / (2 * spec.brakeAccel) + 0.6
     let targetSpeed = 0
     if (aligned) {
@@ -1569,6 +1639,7 @@ export class DroneSim {
     }
     const dirX = distance > 0.001 ? dx / distance : 0
     const dirZ = distance > 0.001 ? dz / distance : 0
+    // 转向/变速平滑系数:曲线过点更跟手(2.6),直线更稳(1.8)
     const steer = Math.min(1, delta * (curved ? 2.6 : 1.8))
     this.velocity.x = lerp(this.velocity.x, dirX * targetSpeed, steer)
     this.velocity.z = lerp(this.velocity.z, dirZ * targetSpeed, steer)
@@ -1632,10 +1703,7 @@ export class DroneSim {
         this.position.y = waypoint.altitude
         this.velocity.y = 0
         this.missionStage = 'depart-cruise'
-        this.pushEvent(
-          'info',
-          `已垂直调整到 ${waypoint.altitude} 米(首航点高度),水平飞向航点 1`,
-        )
+        this.pushEvent('info', `已垂直调整到 ${waypoint.altitude} 米(首航点高度),水平飞向航点 1`)
       }
       this.integratePosition(delta)
       return
@@ -1649,6 +1717,7 @@ export class DroneSim {
         0.5,
         Math.max(0.5, this.missionConfig.autoSpeed),
       )
+      // 刹车距离 = v²/(2a);+0.6 m 是留出的余量
       const brakeDistance = (cruise * cruise) / (2 * spec.brakeAccel) + 0.6
       const targetSpeed =
         distance < brakeDistance ? Math.max(0.4, cruise * (distance / brakeDistance)) : cruise
@@ -1750,15 +1819,11 @@ export class DroneSim {
     if (waypoint.action === 'photo') this.takePhoto()
 
     // 曲线过点不减速,也就没有"停下来悬停"这回事
-    const canHover =
-      this.missionConfig.pathMode !== 'curved' && waypoint.hoverSeconds > 0
+    const canHover = this.missionConfig.pathMode !== 'curved' && waypoint.hoverSeconds > 0
     const extras: string[] = []
     if (waypoint.gimbalPitch !== null) extras.push(`云台俯仰 ${waypoint.gimbalPitch}°`)
     if (canHover) extras.push(`悬停 ${waypoint.hoverSeconds} 秒`)
-    this.pushEvent(
-      'success',
-      `到达${label}${extras.length ? ` · 执行:${extras.join(' · ')}` : ''}`,
-    )
+    this.pushEvent('success', `到达${label}${extras.length ? ` · 执行:${extras.join(' · ')}` : ''}`)
 
     if (!canHover) {
       this.advanceMission()
@@ -1828,7 +1893,8 @@ export class DroneSim {
   }
 
   /** 剩余航程(米):沿剩余航点折线累计,含高度差 */
-  get missionDistanceLeft(): number {    if (this.missionStatus === 'idle' || this.missionIndex < 0) return 0
+  get missionDistanceLeft(): number {
+    if (this.missionStatus === 'idle' || this.missionIndex < 0) return 0
     return this.computeMissionDistanceLeft()
   }
 
@@ -1878,6 +1944,7 @@ export class DroneSim {
     let target = 0
     if (electrified && !this.faults.gnssLost) {
       target = this.faults.compassError ? 12 : 18
+      // 60 m 以上目标星数少 1 颗(真机高空的常见现象)
       if (this.position.y > 60) target -= 1
     }
     if (this.satellites < target) {
@@ -1893,13 +1960,16 @@ export class DroneSim {
     if (this.faults.rcLost) {
       this.rcLinkQuality = Math.max(0, this.rcLinkQuality - delta * 1.6)
     } else {
+      // 2000 m 为信号衰减参考距离,最多扣 60% 信号质量
       const distancePenalty = clamp(this.distanceToHome / 2000, 0, 0.6)
       this.rcLinkQuality = clamp(1 - distancePenalty, 0.35, 1)
     }
   }
 
+  /** 水平精度因子(越小越好);无星时返回 99 表示不可用 */
   get hdop(): number {
     if (this.satellites <= 0) return 99
+    // 1.6 是基准值,每多一颗星改善 0.06;失锁时 +4 直接变差
     return clamp(1.6 - this.satellites * 0.06 + (this.faults.gnssLost ? 4 : 0), 0.5, 5)
   }
 
@@ -1935,11 +2005,14 @@ export class DroneSim {
 
   private updateBattery(delta: number): void {
     if (this.phase === 'powerOff') {
+      // 断电后电池自然降到环境温度 24 ℃(0.02 为很慢的时间常数)
       this.batteryTemp = lerp(this.batteryTemp, 24, Math.min(1, delta * 0.02))
       return
     }
     const watts = this.currentPowerWatts
+    // 能耗换算:W·s / 3600 = Wh
     this.batteryUsedWh += (watts * delta) / 3600
+    // 60 W 为发热归一化参考;升空后散热差,温升上限更高(28→50 ℃ 区间)
     const loadHeat = clamp(watts / 60, 0, 1)
     const targetTemp = this.airborne ? 28 + loadHeat * 22 : 24 + loadHeat * 6
     this.batteryTemp = lerp(this.batteryTemp, targetTemp, Math.min(1, delta * 0.02))
@@ -1979,7 +2052,10 @@ export class DroneSim {
     if (this.airborne && this.lowBattery && !this.criticalBattery && this.phase === 'flying') {
       if (this.lowBatteryCountdown <= 0) {
         this.lowBatteryCountdown = LOW_BATTERY_COUNTDOWN
-        this.pushEvent('warn', `电量低于 ${this.config.lowBatteryPercent}%,${LOW_BATTERY_COUNTDOWN} 秒后自动返航`)
+        this.pushEvent(
+          'warn',
+          `电量低于 ${this.config.lowBatteryPercent}%,${LOW_BATTERY_COUNTDOWN} 秒后自动返航`,
+        )
         this.warnOnce('lowBattery', '低电量:请尽快返航')
       } else {
         this.lowBatteryCountdown -= delta
@@ -2030,6 +2106,7 @@ export class DroneSim {
     const enabled = !this.faults.obstacleAvoidanceOff
     if (!enabled || this.obstacles.length === 0) return
 
+    // 1.6 m:把飞行器当成半径 1.6 m 的球,盒子按此半径膨胀后再做射线检测
     const probeRadius = 1.6
     const origin = this.position
     const nose = headingVector(this.heading)
@@ -2066,7 +2143,9 @@ export class DroneSim {
       const axis = directions.find((item) => item.key === key)
       if (!axis) continue
       const closing = this.velocity.x * axis.x + this.velocity.z * axis.z
+      // 只有正在朝障碍物接近(closing > 0.15 m/s)才需要避障
       if (closing <= 0.15) continue
+      // 同航线:刹停距离 = v²/(2a) + 余量
       const brakingDistance = (closing * closing) / (2 * this.modeSpec.brakeAccel) + 0.6
       if (distance <= brakingDistance) {
         this.velocity.x -= axis.x * closing
@@ -2094,6 +2173,7 @@ export class DroneSim {
     )
   }
 
+  /** 设置云台俯仰角(度,正 = 抬头),自动夹到机型行程内 */
   setGimbalPitch(pitch: number): void {
     this.gimbalPitch = clamp(pitch, DRONE_SPEC.gimbalPitchMin, DRONE_SPEC.gimbalPitchMax)
   }
@@ -2128,17 +2208,20 @@ export class DroneSim {
     this.setRecordingState(false)
   }
 
+  /** 拍照:计数 +1 并记一条事件(实际成像由引擎层负责) */
   takePhoto(): void {
     this.photoCount += 1
     this.pushEvent('info', `拍照(第 ${this.photoCount} 张)`)
   }
 
+  /** 设置变焦倍数,夹在 1~4 倍之间 */
   setZoom(zoom: number): void {
     this.cameraZoom = clamp(zoom, 1, 4)
   }
 
   // ————————————————————————————— 起飞前检查 —————————————————————————————
 
+  /** 起飞前检查项列表(外部注入项 + 内置项),每次读取即时构造 */
   get checklist(): ChecklistItem[] {
     const items: ChecklistItem[] = []
     for (const external of this.externalChecks) items.push(external)
@@ -2200,6 +2283,7 @@ export class DroneSim {
     return items
   }
 
+  /** 是否满足起飞条件:阶段为待机/电机已启动,且所有阻塞项都通过 */
   get canTakeOff(): boolean {
     return (
       (this.phase === 'standby' || this.phase === 'motorsOn') &&
@@ -2209,6 +2293,7 @@ export class DroneSim {
 
   // ————————————————————————————— 警告 / 事件 —————————————————————————————
 
+  /** 当前生效的警告文案列表(界面红条用) */
   get warnings(): string[] {
     const list: string[] = []
     if (this.faults.imuError) list.push('IMU 异常')
@@ -2231,6 +2316,7 @@ export class DroneSim {
 
   private warnOnce(key: string, text: string): void {
     const last = this.warnedAt.get(key) ?? -Infinity
+    // 同一 key 的警告 6 s 内只记一次,防止每帧刷屏
     if (this.time - last < 6) return
     this.warnedAt.set(key, this.time)
     this.pushEventInternal('warn', text)
@@ -2248,6 +2334,7 @@ export class DroneSim {
 
   private pushEventInternal(level: EventLevel, text: string): void {
     this.eventId += 1
+    // unshift:最新事件在数组头部 events[0];超出上限则从尾部丢最旧的
     this.events.unshift({ id: this.eventId, time: this.time, level, text })
     if (this.events.length > 200) this.events.pop()
   }
@@ -2269,6 +2356,7 @@ export class DroneSim {
   /** 风向相对机头的描述,例如"正逆风" */
   get windRelative(): string {
     if (this.config.windSpeed < 0.3) return '静风'
+    // windDirection 记录的是"风吹向"的方位;+180° 换成风的来向再与机头比
     const fromDrone = this.config.windDirection + 180
     const diff = ((fromDrone - this.heading + 540) % 360) - 180
     const abs = Math.abs(diff)
@@ -2282,6 +2370,7 @@ export class DroneSim {
 
   // ————————————————————————————— 快照 —————————————————————————————
 
+  /** 生成完整遥测快照(数组字段已复制,见 DroneSnapshot) */
   snapshot(): DroneSnapshot {
     return {
       phase: this.phase,
@@ -2336,6 +2425,7 @@ export class DroneSim {
       landingStage: this.phase === 'landing' ? this.landingStage : '',
       rthReason: this.rthReason,
       warnings: this.warnings,
+      // 快照只带最近 12 条,避免每帧复制整段日志
       events: this.events.slice(0, 12),
       checklist: this.checklist,
       obstacle: { ...this.obstacleReport },
@@ -2365,6 +2455,7 @@ export class DroneSim {
     }
   }
 
+  /** 仿真累计时长(秒):含地面上电时间,与飞行时长 flightTime 不同 */
   get elapsed(): number {
     return this.time
   }
@@ -2384,6 +2475,7 @@ function rayBoxDistance(
   const minZ = box.minZ - radius
   const maxZ = box.maxZ + radius
 
+  // 标准 slab 法:逐轴求射线进入/离开盒体的参数 t,取各轴交集
   let tMin = 0
   let tMax = Number.POSITIVE_INFINITY
   const axes: Array<[number, number, number, number]> = [

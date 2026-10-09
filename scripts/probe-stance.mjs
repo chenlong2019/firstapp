@@ -10,6 +10,7 @@ const page = await browser.newPage({ viewport: { width: 800, height: 600 } })
 page.on('pageerror', (e) => console.log('[pageerror]', e.message))
 await page.goto(URL, { waitUntil: 'domcontentloaded' })
 await page.waitForFunction('window.__djiDebug?.fly?.rig', undefined, { timeout: 120000 })
+// 必须先展开机臂:落地脚撑只在展开态到位,收纳态量到的接触点位置会漂
 await page.locator('[data-testid="btn-arm"]').click()
 await page.waitForFunction('window.__djiDebug.fly.rig.armFold < 0.02', undefined, { timeout: 30000 })
 await page.waitForTimeout(1200)
@@ -20,6 +21,7 @@ const report = await page.evaluate(() => {
   const model = d.fly.rig.model
   model.updateMatrixWorld(true)
 
+  // 取网格全部顶点经世界矩阵变换后的最低点,y 越小越贴地;单位场景米
   const lowestVertex = (obj) => {
     if (!obj?.isMesh) return null
     const attr = obj.geometry.getAttribute('position')

@@ -17,6 +17,7 @@ const page = await browser.newPage({ viewport: { width: 900, height: 700 } })
 page.on('pageerror', (e) => console.log('[pageerror]', e.message))
 await page.goto(URL, { waitUntil: 'domcontentloaded' })
 await page.waitForFunction('window.__djiDebug?.fly?.rig', undefined, { timeout: 120000 })
+// 先量收纳态:等机臂收敛(armFold→1)后再取,否则铰链/桨心位置还在动
 await page.waitForFunction('window.__djiDebug.fly.rig.armFold > 0.999', undefined, { timeout: 30000 })
 await page.waitForTimeout(500)
 
@@ -63,6 +64,7 @@ const assert = (name, ok, detail = '') => {
   if (!ok) fail += 1
   console.log(`${ok ? 'PASS' : 'FAIL'} │ ${name}${detail ? ` │ ${detail}` : ''}`)
 }
+// 容差按量级给:方向分量 0.02、长度 4mm、位置 5mm(见下方各断言)
 const close = (a, b, tol) => Math.abs(a - b) <= tol
 
 for (const pos of ['FrontLeft', 'FrontRight', 'RearLeft', 'RearRight']) {

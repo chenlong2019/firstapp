@@ -1,3 +1,10 @@
+/**
+ * 飞行沙盒的基础 Three.js/WebGPU 场景容器。
+ *
+ * 处于渲染基础设施层:建/管 渲染器、相机、轨道控制器与内置环境(灯光/地板/坐标轴),
+ * 上层(glb-viewer、DJI 页面)在其上加载模型、接后处理与交互。
+ * 对外导出 THREEViewer 类与 THREEViewerOptions(场景四要素均可由调用方注入)。
+ */
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { WebGPURenderer } from 'three/webgpu'
@@ -96,6 +103,7 @@ export class THREEViewer {
     // 阴影:范围跟着飞机走,所以只需覆盖飞机附近 ±42 米
     keyLight.castShadow = true
     keyLight.shadow.mapSize.set(2048, 2048)
+    // 阴影偏移量:抑制自阴影条纹(acne)与漏光(未初始化时两值可微调)
     keyLight.shadow.bias = -0.0006
     keyLight.shadow.normalBias = 0.02
     const shadowCamera = keyLight.shadow.camera
@@ -145,6 +153,7 @@ export class THREEViewer {
     if (this.axes) this.axes.visible = visible
   }
 
+  /** 取出本查看器使用的场景对象(未初始化时各项为 null)。 */
   getObject() {
     return {
       camera: this.camera,
@@ -239,6 +248,7 @@ function createDefaultControls(
   controls.dampingFactor = 0.08
   controls.minDistance = 2.2
   controls.maxDistance = 160
+  // 略小于 90°:限制极角,避免相机转到水平面以下钻入地面
   controls.maxPolarAngle = Math.PI * 0.495
   controls.target.set(0, 1.2, 0)
   return controls

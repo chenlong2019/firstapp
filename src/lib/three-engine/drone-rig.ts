@@ -16,8 +16,10 @@ import * as THREE from 'three'
  * - 机体姿态:整体倾斜施加在 CTRL_DJI_Root(模型内部根节点,原点≈机身重心)上。
  */
 
+/** 机臂位置标签(前/后 × 左/右),同时用作 PROP_SPIN_SIGN / ARM_LABELS 等表的键。 */
 export type ArmPosition = 'FrontLeft' | 'FrontRight' | 'RearLeft' | 'RearRight'
 
+/** 四个机臂的固定遍历顺序(前左→前右→后左→后右):各处初始化、自检、建场都按它展开。 */
 export const ARM_POSITIONS: ArmPosition[] = ['FrontLeft', 'FrontRight', 'RearLeft', 'RearRight']
 
 const degToRad = (deg: number): number => (deg * Math.PI) / 180
@@ -130,7 +132,8 @@ const Z_AXIS = new THREE.Vector3(0, 0, 1)
 const HEIGHTFIELD_CELL = 0.01
 /** 顶点低于实体下沿多少米以内仍视为接触(桨叶有厚度,留一点擦碰余量) */
 const SOLID_GRAZE = 0.004
-const heightfieldKey = (x: number, z: number): string => `${Math.round(x / HEIGHTFIELD_CELL)},${Math.round(z / HEIGHTFIELD_CELL)}`
+const heightfieldKey = (x: number, z: number): string =>
+  `${Math.round(x / HEIGHTFIELD_CELL)},${Math.round(z / HEIGHTFIELD_CELL)}`
 
 /** 实体区间:同一竖直格内某个实体的下沿/上沿(世界系,米) */
 interface SolidInterval {
@@ -212,6 +215,15 @@ export interface DroneBodyPose {
   rollDeg: number
 }
 
+/**
+ * 无人机模型的机械驱动层:载入后按语义节点名解析出机臂/转子/桨叶/云台,
+ * 并对外提供折叠、自转、云台增稳、整机位姿四类写入接口及自检报告。
+ *
+ * 唯一的世界系/机体系约定见文件顶部「统一坐标系约定」;所有长度比较都在世界系(米)做,
+ * 给节点平移赋值前须乘 localUnits 换算回节点局部单位(见后文注释)。
+ * 整机位姿只有 applyBodyPose() 一个写入入口;骨骼化重导出的模型必须同时驱动
+ * CTRL_DJI_Root 与 RIG_DJI_Arms_Props 两个节点,否则机体会与机臂"撕开"。
+ */
 export class DroneRig {
   readonly model: THREE.Group
   readonly parts: RigPartReport[] = []
@@ -276,6 +288,7 @@ export class DroneRig {
     return this.spinAngle > 0
   }
 
+  /** 设置机臂折叠度(0 = 展开,1 = 完全收纳);变化量 <1e-4 直接返回,避免每帧重复写节点。 */
   setArmFold(fold: number): void {
     const next = Math.max(0, Math.min(1, fold))
     if (Math.abs(next - this.fold) < 1e-4) return
@@ -332,6 +345,7 @@ export class DroneRig {
       blade.mesh.quaternion.copy(foldQuat).multiply(blade.bindQuaternion)
       // 两片桨叶叠拢时沿电机轴错开一点层差,像真机桨夹上下叠放
       if (index === 1) {
+        // 0.012 单位是米(12mm 叠层间距);节点平移用局部单位,故 ×localUnits 换算回来
         blade.mesh.position.addScaledVector(prop.bladeFoldAxis, 0.012 * prop.localUnits * factor)
       }
     }
@@ -401,13 +415,21 @@ export class DroneRig {
    * 云台增稳:传入相对水平面的期望角度,机体倾斜(含停放配平)由这里反向补偿掉。
    * 超出机械行程的部分保留,于是大角度机动时画面会跟着歪——与真机一致。
    */
-  setGimbalAttitude(pitchDeg: number, rollDeg: number, yawDeg: number, bodyPitch: number, bodyRoll: number): void {
+  setGimbalAttitude(
+    pitchDeg: number,
+    rollDeg: number,
+    yawDeg: number,
+    bodyPitch: number,
+    bodyRoll: number,
+  ): void {
     const totalPitch = bodyPitch + this.stancePitchOpen * (1 - this.fold)
     const yawRad = degToRad(clamp(yawDeg, -GIMBAL_LIMITS.yawLimit, GIMBAL_LIMITS.yawLimit))
     const pitchRad = degToRad(
       clamp(pitchDeg - totalPitch, GIMBAL_LIMITS.pitchMin, GIMBAL_LIMITS.pitchMax),
     )
-    const rollRad = degToRad(clamp(-(rollDeg - bodyRoll), -GIMBAL_LIMITS.rollLimit, GIMBAL_LIMITS.rollLimit))
+    const rollRad = degToRad(
+      clamp(-(rollDeg - bodyRoll), -GIMBAL_LIMITS.rollLimit, GIMBAL_LIMITS.rollLimit),
+    )
     if (this.gimbalPitch) this.gimbalPitch.rotation.x = pitchRad
     if (this.gimbalRoll) this.gimbalRoll.rotation.z = rollRad
     if (this.gimbalYaw) this.gimbalYaw.rotation.y = yawRad
@@ -421,7 +443,10 @@ export class DroneRig {
       gimbalQuat.multiply(gimbalQuatB.setFromAxisAngle(X_AXIS, pitchRad))
       gimbalQuat.multiply(gimbalQuatB.setFromAxisAngle(Z_AXIS, rollRad))
       gimbalVec.copy(this.gimbalCenterOffset).applyQuaternion(gimbalQuat)
-      this.gimbalYaw.position.copy(this.gimbalBindPosition).add(this.gimbalCenterOffset).sub(gimbalVec)
+      this.gimbalYaw.position
+        .copy(this.gimbalBindPosition)
+        .add(this.gimbalCenterOffset)
+        .sub(gimbalVec)
     }
   }
 
@@ -434,6 +459,7 @@ export class DroneRig {
     return true
   }
 
+  /** 释放本类记录的可释放资源(几何/材质);模型本体归调用方所有,不在此销毁。 */
   destroy(): void {
     this.disposables.forEach((item) => item.dispose())
     this.disposables.length = 0
@@ -542,7 +568,9 @@ export class DroneRig {
         .normalize()
       const blades: BladeUnit[] = []
       for (const index of [1, 2]) {
-        const mesh = this.model.getObjectByName(`PROP_${position}_Blade_${index}`) as THREE.Mesh | null
+        const mesh = this.model.getObjectByName(
+          `PROP_${position}_Blade_${index}`,
+        ) as THREE.Mesh | null
         if (mesh?.isMesh) {
           blades.push({
             mesh,
@@ -643,7 +671,9 @@ export class DroneRig {
       const firstBlade = prop.blades[0]
       if (!firstBlade) continue
       const axis = prop.bladeFoldAxis
-      const parentQuat = (firstBlade.mesh.parent ?? prop.node).getWorldQuaternion(new THREE.Quaternion())
+      const parentQuat = (firstBlade.mesh.parent ?? prop.node).getWorldQuaternion(
+        new THREE.Quaternion(),
+      )
       const armDirLocal = armDirWorld.clone().applyQuaternion(parentQuat.clone().invert())
       armDirLocal.addScaledVector(axis, -axis.dot(armDirLocal))
       if (armDirLocal.lengthSq() < 1e-6) continue
@@ -651,7 +681,9 @@ export class DroneRig {
       for (const blade of prop.blades) {
         // 桨叶径向(父系局部):几何质心 − 桨毂(父系原点)
         const center = new THREE.Box3().setFromObject(blade.mesh).getCenter(new THREE.Vector3())
-        const rotorInv = new THREE.Matrix4().copy((blade.mesh.parent ?? prop.node).matrixWorld).invert()
+        const rotorInv = new THREE.Matrix4()
+          .copy((blade.mesh.parent ?? prop.node).matrixWorld)
+          .invert()
         const radial = center.applyMatrix4(rotorInv)
         radial.addScaledVector(axis, -axis.dot(radial))
         if (radial.lengthSq() < 1e-6) continue
@@ -668,7 +700,12 @@ export class DroneRig {
       let bestPen = Infinity
       let bestAxis = -1
       for (let offsetDeg = -180; offsetDeg < 180; offsetDeg += 5) {
-        const penetration = this.measureStackPenetration(prop, degToRad(offsetDeg), heightfield, obstacles)
+        const penetration = this.measureStackPenetration(
+          prop,
+          degToRad(offsetDeg),
+          heightfield,
+          obstacles,
+        )
         const axis = this.stackAxisAlignment(prop)
         if (
           penetration < bestPen - 1e-6 ||
@@ -682,7 +719,12 @@ export class DroneRig {
       // 粗扫最优附近再做 1° 细扫,尽量压低残余侵入
       const fineBase = bestOffsetDeg
       for (let fine = fineBase - 4; fine <= fineBase + 4; fine += 1) {
-        const penetration = this.measureStackPenetration(prop, degToRad(fine), heightfield, obstacles)
+        const penetration = this.measureStackPenetration(
+          prop,
+          degToRad(fine),
+          heightfield,
+          obstacles,
+        )
         const axis = this.stackAxisAlignment(prop)
         if (
           penetration < bestPen - 1e-6 ||
@@ -706,7 +748,12 @@ export class DroneRig {
         const attribute = blade.mesh.geometry.getAttribute('position')
         for (let i = 0; i < attribute.count; i += 1) {
           vertex.fromBufferAttribute(attribute, i).applyMatrix4(blade.mesh.matrixWorld)
-          addSolid(obstacles, heightfieldKey(vertex.x, vertex.z), vertex.y - 0.004, vertex.y + 0.004)
+          addSolid(
+            obstacles,
+            heightfieldKey(vertex.x, vertex.z),
+            vertex.y - 0.004,
+            vertex.y + 0.004,
+          )
         }
       }
     }
@@ -776,7 +823,12 @@ export class DroneRig {
     this.model.traverse((object) => {
       const mesh = object as THREE.Mesh
       if (!mesh.isMesh || !mesh.geometry) return
-      if (!mesh.name.startsWith('BODY_') && !mesh.name.startsWith('ARM_') && !mesh.name.startsWith('MOTOR_')) return
+      if (
+        !mesh.name.startsWith('BODY_') &&
+        !mesh.name.startsWith('ARM_') &&
+        !mesh.name.startsWith('MOTOR_')
+      )
+        return
       const attribute = mesh.geometry.getAttribute('position')
       for (let i = 0; i < attribute.count; i += 1) {
         vertex.fromBufferAttribute(attribute, i).applyMatrix4(mesh.matrixWorld)
@@ -809,7 +861,8 @@ export class DroneRig {
       const target = position.startsWith('Front') ? Math.atan2(1, 0) : Math.atan2(-1, 0)
       let foldAngle = current - target
       // 归一到 (-π, π]:取最短路径,避免绕大半圈
-      foldAngle = ((foldAngle + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI
+      foldAngle =
+        ((((foldAngle + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) - Math.PI
       this.arms.push({ position, node, bindQuaternion: node.quaternion.clone(), foldAngle })
     }
   }
@@ -848,7 +901,11 @@ export class DroneRig {
       const dz = contacts.front.z - contacts.rear.z
       if (Math.abs(dz) > 1e-3) {
         // 旋转任意平行轴不改变"两点同高"的解:tanφ = (y前-y后)/(z前-z后)
-        const pitch = clamp(Math.atan((contacts.front.y - contacts.rear.y) / dz), -degToRad(25), degToRad(25))
+        const pitch = clamp(
+          Math.atan((contacts.front.y - contacts.rear.y) / dz),
+          -degToRad(25),
+          degToRad(25),
+        )
         this.stancePitchOpen = THREE.MathUtils.radToDeg(pitch)
       }
     }
@@ -870,7 +927,10 @@ export class DroneRig {
     this.model.updateMatrixWorld(true)
     // —— 收纳态:机身平贴,下沉量 = 机身系最低点相对模型原点的深度
     // (世界系量测;不含脚撑 GEAR_ 与桨叶 PROP_,它们收纳后不接地) ——
-    this.stanceDropFolded = Math.max(0, this.model.position.y - this.measureLowest(['BODY_', 'ARM_', 'MOTOR_']))
+    this.stanceDropFolded = Math.max(
+      0,
+      this.model.position.y - this.measureLowest(['BODY_', 'ARM_', 'MOTOR_']),
+    )
   }
 
   /** 刚体俯仰(弧度)统一写入:机身根 + 骨骼架根(若存在)同步施加 */
@@ -917,7 +977,10 @@ export class DroneRig {
   }
 
   /** 触地带扫描:前脚撑最低点 + 机尾底部最低点(模型局部系) */
-  private scanStanceContacts(toModelLocal: THREE.Matrix4): { front: THREE.Vector3 | null; rear: THREE.Vector3 | null } {
+  private scanStanceContacts(toModelLocal: THREE.Matrix4): {
+    front: THREE.Vector3 | null
+    rear: THREE.Vector3 | null
+  } {
     const vertex = new THREE.Vector3()
     let front: THREE.Vector3 | null = null
     let rear: THREE.Vector3 | null = null
@@ -929,7 +992,10 @@ export class DroneRig {
       if (!isGear && !isBody) return
       const attribute = mesh.geometry.getAttribute('position')
       for (let i = 0; i < attribute.count; i += 1) {
-        vertex.fromBufferAttribute(attribute, i).applyMatrix4(mesh.matrixWorld).applyMatrix4(toModelLocal)
+        vertex
+          .fromBufferAttribute(attribute, i)
+          .applyMatrix4(mesh.matrixWorld)
+          .applyMatrix4(toModelLocal)
         if (isGear && (front === null || vertex.y < front.y)) front = vertex.clone()
         if (isBody && vertex.z > 0.15 && (rear === null || vertex.y < rear.y)) rear = vertex.clone()
       }

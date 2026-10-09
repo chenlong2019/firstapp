@@ -1,4 +1,10 @@
 /** 停放姿态验证:配平角、触地情况、电机轴水平度 */
+/**
+ * 用法:先起 dev server,再 `node scripts/probe-stance-verify.mjs`;侧视全景存 .verify-shots/stance-side.png。
+ * 关键读数:frontGearMinY / rearBodyMinY(前脚撑与机尾谁更低)、propMinY(桨叶离地)、
+ *   stancePitchDeg(机身配平俯仰角)、propAxisDeg(各电机轴离铅垂线的度数)。
+ * 坑:必须等机臂展开后再横扫顶点——折叠态下起落架/桨叶位置不同,数值不可比。
+ */
 import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -27,6 +33,7 @@ const r = await page.evaluate(() => {
   let minGear = Infinity
   let minBodyRear = Infinity
   let minProp = Infinity
+  // 逐顶点横扫全机:分别取全体/起落架/机尾机身/桨叶的最低 y(越小越贴地)
   model.traverse((o) => {
     if (!o.isMesh) return
     const attr = o.geometry.getAttribute('position')
@@ -62,6 +69,7 @@ await page.evaluate(() => {
   const THREE = d.THREE
   const cam = d.game.camera
   const controls = d.game.controls
+  // 侧视全景机位:右前上方看向机身,用于目视核对配平姿态
   cam.position.set(3.2, 1.6, 3.6)
   cam.fov = 40
   cam.near = 0.02

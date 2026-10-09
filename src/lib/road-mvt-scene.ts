@@ -1,9 +1,26 @@
+/**
+ * /roads 页面的 Cesium 矢量瓦片(MVT)道路场景。
+ *
+ * 地球由 ./cesium-utils 初始化;Cesium 以全局脚本引入(全局名 `Cesium`,类型见 src/types/cesium.d.ts)。
+ * 道路数据来自后端瓦片服务(MVT 瓦片 + 道路空间查询接口,地址见 VITE_MVT_URL)。
+ *
+ * 对外唯一入口是 RoadMvtScene:`RoadMvtScene.create()` 创建并等待瓦片加载完成,之后可点选道路
+ * 聚焦、发起点/线/面空间查询、读取性能指标。
+ *
+ * 非直觉约定:道路点选与空间查询分页都用递增的 requestId 做失效判断 —— 用户快速连续操作时,
+ * 过期响应必须丢弃,否则会覆盖最新状态。
+ */
+
 import { initializeCesium } from './cesium-utils'
 
 type RoadGeometry =
   | { type: 'LineString'; coordinates: number[][] }
   | { type: 'MultiLineString'; coordinates: number[][][] }
 
+/**
+ * 单条道路的属性与几何(字段名沿用 OSM / 瓦片服务的原始列名)。
+ * fclass/code/name 等用于展示与分级,geometry 用于高亮与飞行定位。
+ */
 export interface RoadInfo {
   fid?: number
   osm_id?: string | number
@@ -19,8 +36,13 @@ export interface RoadInfo {
   geometry?: RoadGeometry
 }
 
+/** 空间查询类型:point=点选(邻域匹配)、line=沿线、polygon=面内检索 */
 export type SpatialQueryType = 'point' | 'line' | 'polygon'
 
+/**
+ * 空间查询通过回调上报的状态事件:status 表示阶段(绘制/检索中/分页进度/完成/出错/取消);
+ * progress 阶段会带 roads(本页增量)与 total(累计命中数),error 阶段带 message。
+ */
 export interface SpatialQueryEvent {
   type: SpatialQueryType
   status: 'drawing' | 'searching' | 'progress' | 'completed' | 'error' | 'cancelled'
@@ -29,6 +51,10 @@ export interface SpatialQueryEvent {
   message?: string
 }
 
+/**
+ * 道路瓦片样式:Cesium3DTileStyle 的 `conditions` 按 OSM `fclass` 分级配色与线宽,
+ * 由主干道(亮橙、粗)到小路(米白、细)递减,末条 `true` 为兜底样式。
+ */
 const roadStyle = {
   color: {
     conditions: [
@@ -37,9 +63,15 @@ const roadStyle = {
       ['${fclass} === "primary" || ${fclass} === "primary_link"', 'color("#f3c45e")'],
       ['${fclass} === "secondary" || ${fclass} === "secondary_link"', 'color("#f2d99b")'],
       ['${fclass} === "tertiary" || ${fclass} === "tertiary_link"', 'color("#f7e9c5")'],
-      ['${fclass} === "residential" || ${fclass} === "unclassified" || ${fclass} === "living_street"', 'color("#fffaf0")'],
+      [
+        '${fclass} === "residential" || ${fclass} === "unclassified" || ${fclass} === "living_street"',
+        'color("#fffaf0")',
+      ],
       ['${fclass} === "service"', 'color("#f4f0e8")'],
-      ['${fclass} === "footway" || ${fclass} === "path" || ${fclass} === "steps"', 'color("#cfb487")'],
+      [
+        '${fclass} === "footway" || ${fclass} === "path" || ${fclass} === "steps"',
+        'color("#cfb487")',
+      ],
       ['${fclass} === "cycleway"', 'color("#76b978")'],
       ['true', 'color("#e7e1d7")'],
     ],
@@ -51,13 +83,21 @@ const roadStyle = {
       ['${fclass} === "primary" || ${fclass} === "primary_link"', '3.0'],
       ['${fclass} === "secondary" || ${fclass} === "secondary_link"', '2.4'],
       ['${fclass} === "tertiary" || ${fclass} === "tertiary_link"', '1.9'],
-      ['${fclass} === "residential" || ${fclass} === "unclassified" || ${fclass} === "living_street"', '1.45'],
+      [
+        '${fclass} === "residential" || ${fclass} === "unclassified" || ${fclass} === "living_street"',
+        '1.45',
+      ],
       ['${fclass} === "service"', '1.1'],
       ['true', '1.0'],
     ],
   },
 }
 
+/**
+ * MVT 道路场景控制器:持有 Cesium viewer,负责瓦片加载与样式、道路点选高亮、
+ * 点/线/面空间查询的绘制与分页请求,以及 FPS/已加载线数等性能指标。
+ * 实例用静态工厂 `create` 产出(构造函数私有,因为创建后必须等待瓦片加载完成)。
+ */
 export class RoadMvtScene {
   viewer: Cesium.Viewer
   private roadTiles: any
@@ -111,6 +151,7 @@ export class RoadMvtScene {
 
   private async loadRoadTiles(): Promise<void> {
     const cesium = Cesium as any
+    // 数据覆盖范围(西, 南, 东, 北),约为北京及周边;瓦片请求与相机初定位都用它
     const rectangle = cesium.Rectangle.fromDegrees(115.89, 39.45, 116.94, 40.25)
 
     const provider = await cesium.MVTDataProvider.fromUrl(
@@ -126,6 +167,7 @@ export class RoadMvtScene {
 
     const tileset = provider.tileset
     tileset.style = new cesium.Cesium3DTileStyle(roadStyle)
+    // 屏幕空间误差阈值:数值越大越早使用低精度层级、越省性能(道路场景以性能优先)
     tileset.maximumScreenSpaceError = 32
     tileset.preloadAncestors = false
     tileset.preloadSiblings = false
@@ -134,6 +176,7 @@ export class RoadMvtScene {
     tileset.dynamicScreenSpaceErrorFactor = 32
     tileset.progressiveResolutionHeightFraction = 0.3
     tileset.foveatedScreenSpaceError = true
+    // 注视点瓦片加载的时间延迟,单位秒(配合上面的 foveatedScreenSpaceError)
     tileset.foveatedTimeDelay = 0.1
     this.removeTileLoadListener = tileset.tileLoad.addEventListener((tile: any) => {
       const featureCount = Number(tile.content?.featuresLength ?? 0)
@@ -151,6 +194,7 @@ export class RoadMvtScene {
       this.frameCount += 1
       const now = performance.now()
       const elapsed = now - this.fpsStartTime
+      // 累计到约 500ms 才刷新一次 FPS,避免每帧都更新导致读数抖动
       if (elapsed >= 500) {
         this.fps = Math.round((this.frameCount * 1000) / elapsed)
         this.frameCount = 0
@@ -165,6 +209,7 @@ export class RoadMvtScene {
     })
   }
 
+  /** 读取性能指标:fps 为最近一次约 500ms 窗口的采样值,loadedLineCount 为当前已加载瓦片的要素总数 */
   getMetrics(): { fps: number; loadedLineCount: number } {
     return {
       fps: this.fps,
@@ -172,12 +217,14 @@ export class RoadMvtScene {
     }
   }
 
+  /** 清除道路高亮并回调 road=null;同时作废进行中的点选请求,避免旧结果晚到又高亮回来 */
   clearSelection(): void {
     this.selectionRequestId += 1
     this.clearHighlight()
     this.onRoadSelected?.(null)
   }
 
+  /** 从外部(如搜索结果)聚焦某条道路:高亮其几何并飞过去;无几何时只回调、不飞行 */
   focusRoad(road: RoadInfo): void {
     this.selectionRequestId += 1
     this.clearHighlight()
@@ -191,6 +238,7 @@ export class RoadMvtScene {
     this.flyToRoad(road.geometry)
   }
 
+  /** 进入空间查询绘制态:point 点一下即出结果;line/polygon 需多次点击绘制、双击结束 */
   startSpatialQuery(type: SpatialQueryType): void {
     this.cancelSpatialQuery(false)
     this.clearSpatialResultEntities()
@@ -224,6 +272,10 @@ export class RoadMvtScene {
     this.onSpatialQuery?.({ type, status: 'drawing' })
   }
 
+  /**
+   * 取消/清理当前空间查询:中断请求、移除绘制实体、还原被拦截的双击动作。
+   * @param notify 是否向回调上报 cancelled(内部清理时传 false,避免误报)
+   */
   cancelSpatialQuery(notify = true): void {
     const type = this.spatialQueryType
     this.spatialQueryRequestId += 1
@@ -241,11 +293,13 @@ export class RoadMvtScene {
     }
   }
 
+  /** 取消进行中的查询并清掉已有结果图层(页面清除查询结果时调用) */
   clearSpatialQuery(): void {
     this.cancelSpatialQuery(false)
     this.clearSpatialResultEntities()
   }
 
+  /** 释放全部监听与实体并销毁 viewer,页面卸载时调用 */
   destroy(): void {
     this.removeTileLoadListener?.()
     this.removeTileUnloadListener?.()
@@ -281,7 +335,11 @@ export class RoadMvtScene {
       }
     }, cesium.ScreenSpaceEventType.RIGHT_CLICK)
     this.screenSpaceHandler.setInputAction((movement: any) => {
-      if (!this.spatialQueryType || this.spatialQueryType === 'point' || !this.drawingPoints.length) {
+      if (
+        !this.spatialQueryType ||
+        this.spatialQueryType === 'point' ||
+        !this.drawingPoints.length
+      ) {
         return
       }
       this.drawingPreviewPoint = this.pickMapCoordinate(movement.endPosition)?.cartesian
@@ -295,6 +353,7 @@ export class RoadMvtScene {
 
     const cesium = Cesium as any
     const lastPoint = this.drawingPoints[this.drawingPoints.length - 1]
+    // 0.1 米:忽略与上一点几乎重合的点击,避免连出零长线段
     if (lastPoint && cesium.Cartesian3.distance(lastPoint, picked.cartesian) < 0.1) return
 
     this.drawingPoints.push(picked.cartesian)
@@ -305,29 +364,32 @@ export class RoadMvtScene {
       return
     }
     this.drawingPreviewPoint = undefined
-    this.drawingVertexEntities.push(this.viewer.entities.add({
-      name: '空间查询节点',
-      position: picked.cartesian,
-      point: {
-        pixelSize: 9,
-        color: cesium.Color.fromCssColorString('#e53935'),
-        outlineColor: cesium.Color.WHITE,
-        outlineWidth: 2,
-        heightReference: cesium.HeightReference.CLAMP_TO_GROUND,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      },
-    }))
+    this.drawingVertexEntities.push(
+      this.viewer.entities.add({
+        name: '空间查询节点',
+        position: picked.cartesian,
+        point: {
+          pixelSize: 9,
+          color: cesium.Color.fromCssColorString('#e53935'),
+          outlineColor: cesium.Color.WHITE,
+          outlineWidth: 2,
+          heightReference: cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      }),
+    )
     this.updateDrawingEntity()
   }
 
-  private pickMapCoordinate(position: any): { cartesian: any; coordinate: [number, number] } | null {
+  private pickMapCoordinate(
+    position: any,
+  ): { cartesian: any; coordinate: [number, number] } | null {
     const cesium = Cesium as any
     const ray = this.viewer.camera.getPickRay(position)
     const terrainPosition = ray ? this.viewer.scene.globe.pick(ray, this.viewer.scene) : undefined
-    const cartesian = terrainPosition ?? this.viewer.camera.pickEllipsoid(
-      position,
-      this.viewer.scene.globe.ellipsoid,
-    )
+    const cartesian =
+      terrainPosition ??
+      this.viewer.camera.pickEllipsoid(position, this.viewer.scene.globe.ellipsoid)
     if (!cartesian) return null
 
     const cartographic = cesium.Cartographic.fromCartesian(cartesian)
@@ -343,8 +405,10 @@ export class RoadMvtScene {
   private async finishSpatialQuery(): Promise<void> {
     const type = this.spatialQueryType
     if (!type) return
-    if ((type === 'line' && this.drawingCoordinates.length < 2)
-      || (type === 'polygon' && this.drawingCoordinates.length < 3)) {
+    if (
+      (type === 'line' && this.drawingCoordinates.length < 2) ||
+      (type === 'polygon' && this.drawingCoordinates.length < 3)
+    ) {
       return
     }
 
@@ -370,7 +434,9 @@ export class RoadMvtScene {
           body: JSON.stringify({
             geometry,
             offset,
+            // 每页 200 条,循环翻页直到服务端返回 hasMore=false
             limit: 200,
+            // 传给后端的容差半径(米),用于点查询的邻域匹配
             pointToleranceMeters: 150,
           }),
         })
@@ -385,9 +451,12 @@ export class RoadMvtScene {
           hasMore: boolean
         }
         if (requestId !== this.spatialQueryRequestId) return
-        if (!Array.isArray(payload.results) || !Number.isInteger(payload.total)
-          || typeof payload.hasMore !== 'boolean'
-          || (payload.hasMore && payload.results.length === 0)) {
+        if (
+          !Array.isArray(payload.results) ||
+          !Number.isInteger(payload.total) ||
+          typeof payload.hasMore !== 'boolean' ||
+          (payload.hasMore && payload.results.length === 0)
+        ) {
           throw new Error('Invalid spatial query page')
         }
         total = payload.total
@@ -439,6 +508,7 @@ export class RoadMvtScene {
         cesium.Cartographic.fromDegrees(...start),
         cesium.Cartographic.fromDegrees(...end),
       )
+      // 每条边按每约 500 米插一个点:大圆测地线本身是曲线,长边必须加密才贴合地表
       const steps = Math.max(1, Math.ceil(arc.surfaceDistance / 500))
       for (let step = 1; step < steps; step += 1) {
         const point = arc.interpolateUsingFraction(step / steps)
@@ -526,10 +596,7 @@ export class RoadMvtScene {
     this.clearHighlight()
     this.onRoadSelected?.(null)
 
-    const cartesian = this.viewer.camera.pickEllipsoid(
-      position,
-      this.viewer.scene.globe.ellipsoid,
-    )
+    const cartesian = this.viewer.camera.pickEllipsoid(position, this.viewer.scene.globe.ellipsoid)
     if (!cartesian) return
 
     const cartographic = cesium.Cartographic.fromCartesian(cartesian)
@@ -552,9 +619,8 @@ export class RoadMvtScene {
 
   private showHighlight(geometry: RoadGeometry): void {
     const cesium = Cesium as any
-    const coordinates = geometry.type === 'MultiLineString'
-      ? geometry.coordinates[0] ?? []
-      : geometry.coordinates
+    const coordinates =
+      geometry.type === 'MultiLineString' ? (geometry.coordinates[0] ?? []) : geometry.coordinates
     const coordinatePairs = coordinates.flatMap((coordinate) => {
       const longitude = coordinate[0]
       const latitude = coordinate[1]
@@ -562,6 +628,7 @@ export class RoadMvtScene {
         ? [longitude, latitude]
         : []
     })
+    // 凑不满两个点(每点经度+纬度共 2 个数,合计 4 个数)就画不成线
     if (coordinatePairs.length < 4) return
     const positions = cesium.Cartesian3.fromDegreesArray(coordinatePairs)
     this.highlightEntity = this.viewer.entities.add({
@@ -580,9 +647,10 @@ export class RoadMvtScene {
     try {
       for (const road of roads) {
         if (!road.geometry) continue
-        const coordinateGroups = road.geometry.type === 'MultiLineString'
-          ? road.geometry.coordinates
-          : [road.geometry.coordinates]
+        const coordinateGroups =
+          road.geometry.type === 'MultiLineString'
+            ? road.geometry.coordinates
+            : [road.geometry.coordinates]
         for (const coordinates of coordinateGroups) {
           const coordinatePairs = coordinates.flatMap((coordinate) => {
             const longitude = coordinate[0]
@@ -591,15 +659,18 @@ export class RoadMvtScene {
               ? [longitude, latitude]
               : []
           })
+          // 少于两个点无法成线(判据与 showHighlight 一致)
           if (coordinatePairs.length < 4) continue
-          this.spatialResultEntities.push(this.viewer.entities.add({
-            polyline: {
-              positions: cesium.Cartesian3.fromDegreesArray(coordinatePairs),
-              width: 6,
-              material: cesium.Color.fromCssColorString('#3385ff').withAlpha(0.72),
-              clampToGround: true,
-            },
-          }))
+          this.spatialResultEntities.push(
+            this.viewer.entities.add({
+              polyline: {
+                positions: cesium.Cartesian3.fromDegreesArray(coordinatePairs),
+                width: 6,
+                material: cesium.Color.fromCssColorString('#3385ff').withAlpha(0.72),
+                clampToGround: true,
+              },
+            }),
+          )
         }
       }
     } finally {
@@ -616,9 +687,8 @@ export class RoadMvtScene {
 
   private flyToRoad(geometry: RoadGeometry): void {
     const cesium = Cesium as any
-    const coordinateGroups = geometry.type === 'MultiLineString'
-      ? geometry.coordinates
-      : [geometry.coordinates]
+    const coordinateGroups =
+      geometry.type === 'MultiLineString' ? geometry.coordinates : [geometry.coordinates]
     const coordinates = coordinateGroups.flat()
     const validCoordinates: Array<[number, number]> = []
     for (const coordinate of coordinates) {
@@ -636,6 +706,7 @@ export class RoadMvtScene {
     const east = Math.max(...longitudes)
     const south = Math.min(...latitudes)
     const north = Math.max(...latitudes)
+    // 视野外扩 25% 留边;0.002 度(约 200 米)是短道路的最小外扩量,避免贴边
     const longitudePadding = Math.max((east - west) * 0.25, 0.002)
     const latitudePadding = Math.max((north - south) * 0.25, 0.002)
 

@@ -6,7 +6,16 @@
  * 不碰 src/lib 里的任何内部文件。四个标签页对应库的四层用法,右侧是真实运行的实例,
  * 左侧是**与运行代码同源**的调用片段 —— 改这一页的代码就是改那段片段。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue'
 import * as THREE from 'three'
 // 演示 05 要自己造渲染器与轨道控制(证明注入生效),所以按值引入
 import { WebGPURenderer } from 'three/webgpu'
@@ -34,8 +43,10 @@ import CodeBlock from './CodeBlock.vue'
 // 标签页定义:每层一段说明 + 一段可直接抄走的代码
 // ────────────────────────────────────────────────────────────────────────────
 
+/** 五个标签页的键(与 TABS 的 key 一一对应) */
 type DemoTab = 'sim' | 'world' | 'sandbox' | 'glb' | 'inject'
 
+/** 单个标签页的元数据:左侧说明文案 + 中间"与运行代码同源"的代码片段 */
 interface TabMeta {
   key: DemoTab
   step: string
@@ -49,6 +60,7 @@ interface TabMeta {
 
 const TABS: TabMeta[] = [
   {
+    // 01 纯逻辑层:DroneSim 的固定步长循环(零依赖,可跑在 Node / Worker)
     key: 'sim',
     step: '01',
     title: '纯逻辑层',
@@ -87,6 +99,7 @@ sim.startRth('低电量')                        // 智能返航
 sim.emergencyStop()                           // 停桨:空中会被拒绝,须先落地`,
   },
   {
+    // 02 场景底座:THREEViewer + DroneWorld,渲染循环由调用方自己写
     key: 'world',
     step: '02',
     title: '场景底座',
@@ -131,6 +144,7 @@ world.clearTrail()                 // 清空航迹
 viewer.setAxesVisible(true)        // 世界坐标轴`,
   },
   {
+    // 03 完整装配:GameInstance 一行起一个可渲染的飞行沙盒
     key: 'sandbox',
     step: '03',
     title: '完整装配',
@@ -167,6 +181,7 @@ const snap = game.getSnapshot()        // phaseLabel / batteryPercent / armFold 
 const shot = await fly.requestPhoto()  // { dataUrl, width, height } 或 null`,
   },
   {
+    // 04 模型查看器:GlbViewer 加载任意 GLB 并做检查/高亮
     key: 'glb',
     step: '04',
     title: '模型查看器',
@@ -200,6 +215,7 @@ viewer.stepFrame(-1)                // 单帧步进
 const result = await viewer.exportSelected()  // 导出选中部件为 GLB`,
   },
   {
+    // 05 资源注入:scene / camera / renderer / controls 由调用方提供
     key: 'inject',
     step: '05',
     title: '资源注入',
@@ -248,12 +264,14 @@ await renderer.dispose()`,
 ]
 
 const activeTab = ref<DemoTab>('sim')
+// 当前标签对应的元数据;未匹配时回退到首项,保证中间面板始终有内容
 const current = computed(() => TABS.find((tab) => tab.key === activeTab.value) ?? TABS[0]!)
 
 // ────────────────────────────────────────────────────────────────────────────
 // 演示 01 · DroneSim(自带固定步长循环,不依赖渲染)
 // ────────────────────────────────────────────────────────────────────────────
 
+// 仿真固定步长 1/60 秒:推进量与渲染帧率、时间倍速都无关
 const FIXED_STEP = 1 / 60
 /** 状态机全相位(含返航/坠落/停桨等分支相位),相位条按它高亮 */
 const PHASE_ORDER = [
@@ -270,6 +288,7 @@ const PHASE_ORDER = [
   'stopped',
 ] as const
 
+// 演示 01 状态:实例用 shallowRef(内部状态不需深响应,UI 全靠快照驱动)
 const simRef = shallowRef<DroneSim | null>(null)
 const simSnap = ref<DroneSnapshot | null>(null)
 const simLog = ref<SimEvent[]>([])
@@ -277,12 +296,14 @@ const simRunning = ref(false)
 const simMessage = ref('点“上电”开始:2.6 秒自检 + 2.4 秒预热后进入待机')
 const simBattery = ref(100)
 
+// 循环用非响应式句柄/计时器(放 ref 里会无谓触发渲染)
 let simRaf = 0
 let simLastTs = 0
 let simAccumulator = 0
 let simUiClock = 0
 let simPendingTakeoff = false
 
+/** 仿真主循环:按固定步长推进 step(),并每 100ms 刷新一次 UI */
 function simTick(timestamp: number): void {
   simRaf = window.requestAnimationFrame(simTick)
   const sim = simRef.value
@@ -315,6 +336,7 @@ function simTick(timestamp: number): void {
   }
 }
 
+/** 上电:进入"自检 → 预热 → 待机"流程 */
 function simPowerOn(): void {
   const sim = simRef.value
   if (!sim) return
@@ -322,6 +344,7 @@ function simPowerOn(): void {
   simMessage.value = '已上电,开始自检'
 }
 
+/** 一键起飞:未上电则先上电并排队;待机/电机已启则直接起飞,否则排队等待 */
 function simTakeoff(): void {
   const sim = simRef.value
   if (!sim) return
@@ -332,13 +355,16 @@ function simTakeoff(): void {
     return
   }
   if (sim.phase === 'standby' || sim.phase === 'motorsOn') {
-    simMessage.value = sim.autoTakeOff() ? '已起飞,自动上升至 1.2 米' : '起飞被拒绝(起飞前检查未通过)'
+    simMessage.value = sim.autoTakeOff()
+      ? '已起飞,自动上升至 1.2 米'
+      : '起飞被拒绝(起飞前检查未通过)'
     return
   }
   simPendingTakeoff = true
   simMessage.value = '已排队:当前阶段结束后立刻起飞'
 }
 
+/** 自动降落(会顺带取消排队中的起飞) */
 function simLand(): void {
   const sim = simRef.value
   if (!sim) return
@@ -346,18 +372,21 @@ function simLand(): void {
   simMessage.value = sim.startLanding() ? '开始自动降落(落地 1.2 秒后停桨)' : '当前状态不能降落'
 }
 
+/** 停桨:空中会被拒绝,必须先降落 */
 function simStopMotors(): void {
   const sim = simRef.value
   if (!sim) return
   simMessage.value = sim.emergencyStop() ? '电机已停止' : '空中拒绝停桨 —— 请先降落(看事件日志)'
 }
 
+/** 手动触发智能返航(仅飞行中可用) */
 function simRth(): void {
   const sim = simRef.value
   if (!sim) return
   simMessage.value = sim.startRth('手动触发') ? '已触发智能返航' : '仅在飞行中可触发返航'
 }
 
+/** 重置仿真到初始态 */
 function simReset(): void {
   const sim = simRef.value
   if (!sim) return
@@ -366,11 +395,13 @@ function simReset(): void {
   simMessage.value = '已重置'
 }
 
+/** 滑块强制电量:同步 UI 并把值推给仿真内核 */
 function simSetBattery(value: number): void {
   simBattery.value = value
   simRef.value?.forceBatteryLevel(value)
 }
 
+/** 当前相位在 PHASE_ORDER 里的下标(未知相位回退 0),供相位条高亮 */
 const simPhaseIndex = computed(() => {
   const phase = simSnap.value?.phase ?? 'powerOff'
   const index = PHASE_ORDER.indexOf(phase as (typeof PHASE_ORDER)[number])
@@ -381,6 +412,7 @@ const simPhaseIndex = computed(() => {
 // 演示 02 · THREEViewer + DroneWorld(自己写渲染循环)
 // ────────────────────────────────────────────────────────────────────────────
 
+// 演示 02 响应式状态(实例与非响应式循环句柄见下方 let)
 const worldHost = ref<HTMLElement | null>(null)
 const worldReady = ref(false)
 const worldError = ref('')
@@ -392,6 +424,7 @@ const worldPhase = ref(0)
 // 模板里不要直接读实例变量(let 绑定在模板侧会被窄化成 null),统一用响应式状态暴露
 const worldCounts = reactive({ obstacles: 0, boxes: 0 })
 
+// 演示 02 的实例/循环句柄:不进响应式,避免无谓更新
 let worldViewer: THREEViewer | null = null
 let worldWorld: DroneWorld | null = null
 let worldMarker: THREE.Mesh | null = null
@@ -400,6 +433,7 @@ let worldLastTs = 0
 let worldClock = 0
 let worldToken = 0
 
+/** 装配场景底座:建 viewer / DroneWorld / 飞行标记,并自建渲染循环 */
 async function mountWorldDemo(): Promise<void> {
   const host = worldHost.value
   if (!host) return
@@ -475,6 +509,7 @@ async function mountWorldDemo(): Promise<void> {
   worldRaf = window.requestAnimationFrame(render)
 }
 
+/** 拆解演示 02:停循环、释放自建对象、销毁 viewer 与 world */
 function unmountWorldDemo(): void {
   worldToken += 1
   window.cancelAnimationFrame(worldRaf)
@@ -489,16 +524,19 @@ function unmountWorldDemo(): void {
   worldViewer = null
 }
 
+/** 切换障碍物显隐 */
 function worldToggleObstacles(): void {
   worldObstaclesVisible.value = !worldObstaclesVisible.value
   worldWorld?.setObstaclesVisible(worldObstaclesVisible.value)
 }
 
+/** 切换世界坐标轴显隐 */
 function worldToggleAxes(): void {
   worldAxesVisible.value = !worldAxesVisible.value
   worldViewer?.setAxesVisible(worldAxesVisible.value)
 }
 
+/** 清空航迹尾迹 */
 function worldClearTrail(): void {
   worldWorld?.clearTrail()
 }
@@ -507,6 +545,7 @@ function worldClearTrail(): void {
 // 演示 03 · GameInstance(完整飞行沙盒)
 // ────────────────────────────────────────────────────────────────────────────
 
+// 演示 03 响应式状态:相机模式 / 遥测 / 快照 / 拍照结果 / 提示文案
 const sandboxHost = ref<HTMLElement | null>(null)
 const sandboxReady = ref(false)
 const sandboxError = ref('')
@@ -518,11 +557,13 @@ const sandboxMessage = ref('展开机臂 → 一键起飞,和真机流程一致'
 const sandboxPhoto = ref<PhotoShot | null>(null)
 const sandboxShooting = ref(false)
 
+// 演示 03 的实例/轮询句柄:game 与轮询 timer 不进响应式
 let sandboxGame: GameInstance | null = null
 let sandboxToken = 0
 let sandboxPoll = 0
 let sandboxPendingTakeoff = false
 
+/** 装配完整沙盒:new GameInstance 即自动建场景,靠轮询 game.ready 等模型就绪 */
 async function mountSandboxDemo(): Promise<void> {
   const host = sandboxHost.value
   if (!host) return
@@ -562,7 +603,9 @@ async function mountSandboxDemo(): Promise<void> {
         const blocked = sim.checklist.filter((item) => item.blocking && !item.ok)
         if (blocked.length === 0) {
           sandboxPendingTakeoff = false
-          sandboxMessage.value = sim.autoTakeOff() ? '起飞:自动上升至 1.2 米' : '起飞被拒绝(检查未通过)'
+          sandboxMessage.value = sim.autoTakeOff()
+            ? '起飞:自动上升至 1.2 米'
+            : '起飞被拒绝(检查未通过)'
         } else {
           sandboxMessage.value = `等待起飞前检查:${blocked.map((item) => item.label).join('、')}`
         }
@@ -571,6 +614,7 @@ async function mountSandboxDemo(): Promise<void> {
   }, 200)
 }
 
+/** 拆解演示 03:停轮询、销毁实例 */
 function unmountSandboxDemo(): void {
   sandboxToken += 1
   window.clearInterval(sandboxPoll)
@@ -581,12 +625,14 @@ function unmountSandboxDemo(): void {
   sandboxReady.value = false
 }
 
+/** 切换相机模式(orbit 观察者 / follow 跟随 / fpv 机载) */
 function sandboxSetMode(mode: CameraMode): void {
   sandboxMode.value = mode
   sandboxGame?.droneFly?.setCameraMode(mode)
   sandboxMessage.value = `相机切换到「${CAMERA_MODE_LIST.find((item) => item.key === mode)?.label ?? mode}」视角`
 }
 
+/** 收纳/展开机臂:按当前 armFold 反向设置机构目标 */
 function sandboxToggleArms(): void {
   const fly = sandboxGame?.droneFly
   const sim = fly?.sim
@@ -596,6 +642,7 @@ function sandboxToggleArms(): void {
   sandboxMessage.value = fold === 0 ? '展开机臂中…' : '收纳机臂中…'
 }
 
+/** 一键起飞:只置排队标志,真正的"上电 → 展开 → 起飞"由轮询编排 */
 function sandboxTakeoff(): void {
   const fly = sandboxGame?.droneFly
   if (!fly) return
@@ -603,6 +650,7 @@ function sandboxTakeoff(): void {
   sandboxMessage.value = '准备中:上电 → 展开机臂 → 起飞'
 }
 
+/** 降落(并取消排队中的起飞) */
 function sandboxLand(): void {
   const sim = sandboxGame?.droneFly?.sim
   if (!sim) return
@@ -610,6 +658,7 @@ function sandboxLand(): void {
   sandboxMessage.value = sim.startLanding() ? '开始降落' : '当前状态不能降落'
 }
 
+/** 云台拍照:requestPhoto() 返回 { dataUrl, width, height } 或 null */
 async function sandboxPhotoShoot(): Promise<void> {
   const fly = sandboxGame?.droneFly
   if (!fly || sandboxShooting.value) return
@@ -621,6 +670,7 @@ async function sandboxPhotoShoot(): Promise<void> {
   sandboxMessage.value = shot ? `已拍下 ${shot.width}×${shot.height} 的云台取景照片` : '拍照失败'
 }
 
+/** 复位:收起机臂并重置仿真内核 */
 function sandboxReset(): void {
   const fly = sandboxGame?.droneFly
   if (!fly) return
@@ -634,12 +684,19 @@ function sandboxReset(): void {
 // 演示 04 · GlbViewer
 // ────────────────────────────────────────────────────────────────────────────
 
+// 演示用 GLB 资源(public/models 下),查看器与拍照演示共用同一模型
 const SAMPLE_URL = '/models/djiair_renamed.glb'
 
+// 演示 04 响应式状态:加载状态、模型统计、各显示开关
 const glbHost = ref<HTMLElement | null>(null)
 const glbReady = ref(false)
 const glbError = ref('')
-const glbStatus = reactive<GlbLoadStatus>({ state: 'idle', fileName: '', progress: null, message: '' })
+const glbStatus = reactive<GlbLoadStatus>({
+  state: 'idle',
+  fileName: '',
+  progress: null,
+  message: '',
+})
 const glbStats = ref<GlbModelStats | null>(null)
 const glbFps = ref(0)
 const glbAutoRotate = ref(false)
@@ -648,10 +705,12 @@ const glbWireframe = ref(false)
 const glbExplode = ref(0)
 const glbExplodeAvailable = ref(false)
 
+// 演示 04 的实例/轮询句柄
 let glbViewer: GlbViewer | null = null
 let glbToken = 0
 let glbPoll = 0
 
+/** 装配 GLB 查看器:init 后轮询 FPS/统计,并加载示例模型 */
 async function mountGlbDemo(): Promise<void> {
   const host = glbHost.value
   if (!host) return
@@ -693,6 +752,7 @@ async function mountGlbDemo(): Promise<void> {
   }
 }
 
+/** 拆解演示 04:停轮询、销毁查看器、重置加载状态 */
 function unmountGlbDemo(): void {
   glbToken += 1
   window.clearInterval(glbPoll)
@@ -703,6 +763,7 @@ function unmountGlbDemo(): void {
   Object.assign(glbStatus, { state: 'idle', fileName: '', progress: null, message: '' })
 }
 
+/** 重新加载示例模型 */
 async function glbReload(): Promise<void> {
   if (!glbViewer) return
   glbError.value = ''
@@ -713,26 +774,31 @@ async function glbReload(): Promise<void> {
   }
 }
 
+/** 切换自动旋转 */
 function glbToggleAutoRotate(): void {
   glbAutoRotate.value = !glbAutoRotate.value
   glbViewer?.setAutoRotate(glbAutoRotate.value)
 }
 
+/** 切换骨骼辅助线 */
 function glbToggleSkeleton(): void {
   glbSkeleton.value = !glbSkeleton.value
   glbViewer?.setSkeletonVisible(glbSkeleton.value)
 }
 
+/** 切换线框显示 */
 function glbToggleWireframe(): void {
   glbWireframe.value = !glbWireframe.value
   glbViewer?.setWireframe(glbWireframe.value)
 }
 
+/** 设置爆炸图强度(0~1) */
 function glbSetExplode(value: number): void {
   glbExplode.value = value
   glbViewer?.setExplode(value)
 }
 
+/** 重置视角 */
 function glbResetView(): void {
   glbViewer?.resetView()
 }
@@ -741,6 +807,7 @@ function glbResetView(): void {
 // 演示 05 · 资源注入(scene / camera / renderer / controls 由调用方提供)
 // ────────────────────────────────────────────────────────────────────────────
 
+// 注入模式:四要素全注入 / 只注入 camera / 全部由库新建
 const INJECT_MODE_LIST = [
   { key: 'inject' as const, label: '四要素全部注入' },
   { key: 'partial' as const, label: '只注入 camera' },
@@ -753,6 +820,7 @@ type InjectMode = (typeof INJECT_MODE_LIST)[number]['key']
 const CAMERA_OWN_POS = new THREE.Vector3(4.6, 3.2, 6.2)
 const CAMERA_DEFAULT_POS = new THREE.Vector3(7.5, 4.2, 9.5)
 
+// 演示 05 响应式状态:注入模式、内置环境开关、校验结果、提示文案
 const injectHost = ref<HTMLElement | null>(null)
 const injectReady = ref(false)
 const injectError = ref('')
@@ -774,6 +842,7 @@ const injectInfo = reactive({
   frames: 0,
 })
 
+// 演示 05 的实例/循环句柄 + 本页自有的四要素(归调用方,须由本页释放)
 let injectViewer: THREEViewer | null = null
 // 下面四个是「调用方自己的」资源:库只借用,不释放 —— 生命周期由本页面自己管
 let injectScene: THREE.Scene | null = null
@@ -806,13 +875,16 @@ function createOwnResources(mode: InjectMode): void {
 
   // 轨道控制必须挂在某个 canvas 上,所以只有自带渲染器时才谈得上注入控制器
   injectControls =
-    injectRenderer && injectCamera ? new OrbitControls(injectCamera, injectRenderer.domElement) : null
+    injectRenderer && injectCamera
+      ? new OrbitControls(injectCamera, injectRenderer.domElement)
+      : null
   if (injectControls) {
     injectControls.enableDamping = true
     injectControls.target.set(0, 1.1, 0)
   }
 }
 
+/** 装配注入演示:按模式建自有资源 → 传给 THREEViewer → 校验身份/机位/归属 */
 async function mountInjectDemo(): Promise<void> {
   const host = injectHost.value
   if (!host) return
@@ -926,6 +998,7 @@ async function mountInjectDemo(): Promise<void> {
   injectRaf = window.requestAnimationFrame(render)
 }
 
+/** 拆解演示 05:销毁 viewer,并释放本页自有的四要素 */
 function unmountInjectDemo(): void {
   injectToken += 1
   window.cancelAnimationFrame(injectRaf)
@@ -957,6 +1030,7 @@ function unmountInjectDemo(): void {
   injectInfo.frames = 0
 }
 
+/** 重建注入演示:先拆再装(切模式 / 切环境都走这里) */
 async function remountInjectDemo(reason: string): Promise<void> {
   unmountInjectDemo()
   injectNote.value = reason
@@ -964,12 +1038,14 @@ async function remountInjectDemo(reason: string): Promise<void> {
   await mountInjectDemo()
 }
 
+/** 切换注入模式(需重建场景) */
 async function injectSetMode(mode: InjectMode): Promise<void> {
   if (mode === injectMode.value) return
   injectMode.value = mode
   await remountInjectDemo('切换资源来源…')
 }
 
+/** 切换内置环境(灯光 / 地板 / 坐标轴),需重建场景生效 */
 async function injectToggleEnvironment(): Promise<void> {
   injectEnvironment.value = !injectEnvironment.value
   await remountInjectDemo(injectEnvironment.value ? '开启内置环境…' : '关闭内置环境…')
@@ -979,6 +1055,7 @@ async function injectToggleEnvironment(): Promise<void> {
 // 标签切换:同一时刻只保留一个 WebGPU 渲染器(切走即销毁)
 // ────────────────────────────────────────────────────────────────────────────
 
+/** 按标签拆除对应演示的运行时资源 */
 function teardown(tab: DemoTab): void {
   if (tab === 'world') unmountWorldDemo()
   if (tab === 'sandbox') unmountSandboxDemo()
@@ -986,6 +1063,7 @@ function teardown(tab: DemoTab): void {
   if (tab === 'inject') unmountInjectDemo()
 }
 
+/** 激活标签:sim 只建一次实例,其余标签按需挂载 */
 async function activate(tab: DemoTab): Promise<void> {
   await nextTick()
   if (tab === 'sim') {
@@ -1002,20 +1080,24 @@ async function activate(tab: DemoTab): Promise<void> {
   if (tab === 'inject') await mountInjectDemo()
 }
 
+/** 切换标签:先拆旧面板再改 activeTab(新面板的挂载交给 watch) */
 async function selectTab(tab: DemoTab): Promise<void> {
   if (tab === activeTab.value) return
   teardown(activeTab.value)
   activeTab.value = tab
 }
 
+// 标签变化即挂载对应演示(同一时刻只保留一个 WebGPU 渲染器)
 watch(activeTab, async (tab) => {
   await activate(tab)
 })
 
+// 首屏默认激活纯逻辑层(唯一不依赖 WebGL 的标签,起得最快)
 onMounted(async () => {
   await activate('sim')
 })
 
+// 卸载时停掉纯逻辑层循环,并拆除所有三维演示
 onBeforeUnmount(() => {
   window.cancelAnimationFrame(simRaf)
   simRef.value = null
@@ -1029,6 +1111,7 @@ onBeforeUnmount(() => {
 // 显示辅助
 // ────────────────────────────────────────────────────────────────────────────
 
+// 事件级别 → 中文标签,供事件日志显示
 const EVENT_LEVEL_LABEL: Record<string, string> = {
   info: '信息',
   success: '成功',
@@ -1036,6 +1119,7 @@ const EVENT_LEVEL_LABEL: Record<string, string> = {
   error: '错误',
 }
 
+/** 秒数格式化为 mm:ss(事件日志用) */
 function formatClock(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds))
   const mm = String(Math.floor(total / 60)).padStart(2, '0')
@@ -1043,6 +1127,7 @@ function formatClock(seconds: number): string {
   return `${mm}:${ss}`
 }
 
+/** 高度条百分比:以 30m 为满量程(与模板里 "30 m 量程" 标注一致) */
 const simAltitudePercent = computed(() =>
   Math.min(100, Math.max(0, ((simSnap.value?.altitude ?? 0) / 30) * 100)),
 )
@@ -1050,6 +1135,7 @@ const simAltitudePercent = computed(() =>
 
 <template>
   <main class="demo-page">
+    <!-- 顶部:标题与跨页快捷入口 -->
     <header class="demo-head">
       <div class="head-brand">
         <h1>three-engine 库调用示例</h1>
@@ -1065,6 +1151,7 @@ const simAltitudePercent = computed(() =>
     </header>
 
     <div class="demo-body">
+      <!-- 左侧:示例选择器 + "作为依赖包使用"的安装提示 -->
       <aside class="step-list">
         <button
           v-for="tab in TABS"
@@ -1087,12 +1174,13 @@ const simAltitudePercent = computed(() =>
           <code class="install-cmd">npm i three-engine three</code>
           <code class="install-cmd subtle">npm i -D @types/three</code>
           <p class="install-note">
-            本仓库内等价写法:<code>import … from '@/lib'</code>(同一份入口文件)。
-            打包命令 <code>npm run build:lib</code> → <code>dist-lib/</code>。
+            本仓库内等价写法:<code>import … from '@/lib'</code>(同一份入口文件)。 打包命令
+            <code>npm run build:lib</code> → <code>dist-lib/</code>。
           </p>
         </div>
       </aside>
 
+      <!-- 中间:当前示例的说明 + 与运行代码同源的代码块 -->
       <section class="code-panel">
         <h2>
           <span class="h2-no">{{ current.step }}</span>
@@ -1105,6 +1193,7 @@ const simAltitudePercent = computed(() =>
         <CodeBlock :code="current.code" :title="current.file" />
       </section>
 
+      <!-- 右侧:与标签对应的真实运行面板(每个标签一个分支) -->
       <section class="live-panel">
         <!-- ————— 01 纯逻辑层 ————— -->
         <div v-if="activeTab === 'sim'" class="live-inner">
@@ -1130,7 +1219,9 @@ const simAltitudePercent = computed(() =>
           <div class="gauge-grid">
             <div class="gauge">
               <span class="gauge-label">阶段</span>
-              <span class="gauge-value" data-testid="sim-phase">{{ simSnap?.phaseLabel ?? '—' }}</span>
+              <span class="gauge-value" data-testid="sim-phase">{{
+                simSnap?.phaseLabel ?? '—'
+              }}</span>
             </div>
             <div class="gauge">
               <span class="gauge-label">模式</span>
@@ -1210,13 +1301,21 @@ const simAltitudePercent = computed(() =>
           <div v-if="!worldReady" class="canvas-overlay">正在初始化渲染器…</div>
           <div v-if="worldError" class="canvas-overlay error">{{ worldError }}</div>
           <div class="canvas-toolbar">
-            <button type="button" :class="{ active: worldObstaclesVisible }" @click="worldToggleObstacles">
+            <button
+              type="button"
+              :class="{ active: worldObstaclesVisible }"
+              @click="worldToggleObstacles"
+            >
               障碍物
             </button>
             <button type="button" :class="{ active: worldAxesVisible }" @click="worldToggleAxes">
               坐标轴
             </button>
-            <button type="button" :class="{ active: worldFlying }" @click="worldFlying = !worldFlying">
+            <button
+              type="button"
+              :class="{ active: worldFlying }"
+              @click="worldFlying = !worldFlying"
+            >
               {{ worldFlying ? '暂停飞行' : '继续飞行' }}
             </button>
             <button type="button" @click="worldClearTrail">清空航迹</button>
@@ -1247,7 +1346,12 @@ const simAltitudePercent = computed(() =>
               {{ mode.label }}
             </button>
             <span class="toolbar-sep"></span>
-            <button type="button" class="primary" data-testid="sandbox-takeoff" @click="sandboxTakeoff">
+            <button
+              type="button"
+              class="primary"
+              data-testid="sandbox-takeoff"
+              @click="sandboxTakeoff"
+            >
               一键起飞
             </button>
             <button type="button" data-testid="sandbox-land" @click="sandboxLand">降落</button>
@@ -1269,8 +1373,12 @@ const simAltitudePercent = computed(() =>
               高度 {{ sandboxTelemetry.altitudeMeters }} m
             </span>
             <span class="hud-item">速度 {{ sandboxTelemetry.speedMetersPerSecond }} m/s</span>
-            <span class="hud-item">电量 {{ (sandboxSnapshot?.batteryPercent ?? 0).toFixed(0) }} %</span>
-            <span class="hud-item">机臂 {{ (sandboxSnapshot?.armFold ?? 1) > 0.5 ? '收纳' : '展开' }}</span>
+            <span class="hud-item"
+              >电量 {{ (sandboxSnapshot?.batteryPercent ?? 0).toFixed(0) }} %</span
+            >
+            <span class="hud-item"
+              >机臂 {{ (sandboxSnapshot?.armFold ?? 1) > 0.5 ? '收纳' : '展开' }}</span
+            >
             <span class="hud-item">FPS {{ sandboxFps }}</span>
           </div>
 
@@ -1358,7 +1466,9 @@ const simAltitudePercent = computed(() =>
             </div>
             <div class="gauge">
               <span class="gauge-label">材质 / 贴图</span>
-              <span class="gauge-value">{{ glbStats?.materials ?? '—' }} / {{ glbStats?.textures ?? '—' }}</span>
+              <span class="gauge-value"
+                >{{ glbStats?.materials ?? '—' }} / {{ glbStats?.textures ?? '—' }}</span
+              >
             </div>
           </div>
         </div>
@@ -1425,11 +1535,15 @@ const simAltitudePercent = computed(() =>
             </div>
             <div class="gauge">
               <span class="gauge-label">场景内对象</span>
-              <span class="gauge-value" data-testid="inject-children">{{ injectInfo.sceneChildren }}</span>
+              <span class="gauge-value" data-testid="inject-children">{{
+                injectInfo.sceneChildren
+              }}</span>
             </div>
             <div class="gauge">
               <span class="gauge-label">灯光数量</span>
-              <span class="gauge-value" data-testid="inject-lights">{{ injectInfo.builtInLights }}</span>
+              <span class="gauge-value" data-testid="inject-lights">{{
+                injectInfo.builtInLights
+              }}</span>
             </div>
           </div>
 
@@ -1461,11 +1575,15 @@ const simAltitudePercent = computed(() =>
 </template>
 
 <style scoped>
+/* ————— 页面外框与顶栏 ————— */
 .demo-page {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 100vh;
+  /* 原为 min-height: 100vh —— 现在页面挂在 App.vue 的 .route-host(菜单栏以下的区域)里,
+     再用视口高度会把整页撑高、把顶部菜单栏挤出屏幕。改成 0,高度由外层 100% 决定,
+     内部 .demo-body(flex:1 + min-height:0)与各列滚动条负责容纳超出的内容。 */
+  min-height: 0;
   color: #d3ece6;
   background:
     radial-gradient(1200px 600px at 15% -10%, rgb(23 62 66 / 55%), transparent 60%),
@@ -1565,7 +1683,11 @@ const simAltitudePercent = computed(() =>
 .step-no {
   flex: none;
   color: #7de6ca;
-  font: 700 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    700 12px/1 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
 }
 
 .step-text {
@@ -1598,7 +1720,11 @@ const simAltitudePercent = computed(() =>
 .install-title {
   margin: 0 0 7px;
   color: #7de6ca;
-  font: 600 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    600 10px/1.4 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   letter-spacing: 0.08em;
 }
 
@@ -1609,7 +1735,11 @@ const simAltitudePercent = computed(() =>
   color: #d9f5ee;
   background: #0a1a1f;
   border-radius: 4px;
-  font: 400 10px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    400 10px/1.5 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   overflow-wrap: anywhere;
 }
 
@@ -1650,7 +1780,11 @@ const simAltitudePercent = computed(() =>
 
 .h2-no {
   color: #7de6ca;
-  font: 700 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    700 12px/1 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
 }
 
 .lead {
@@ -1707,7 +1841,11 @@ const simAltitudePercent = computed(() =>
 
 .live-tag {
   color: #7de6ca;
-  font: 600 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    600 10px/1.4 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   letter-spacing: 0.08em;
 }
 
@@ -1739,7 +1877,11 @@ const simAltitudePercent = computed(() =>
   border: 1px solid rgb(121 230 202 / 10%);
   border-radius: 4px;
   background: rgb(10 24 29 / 70%);
-  font: 500 8px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    500 8px/1.3 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1788,7 +1930,11 @@ const simAltitudePercent = computed(() =>
 
 .gauge-value {
   color: #dcf6ef;
-  font: 600 12px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    600 12px/1.2 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1850,7 +1996,11 @@ const simAltitudePercent = computed(() =>
   top: 50%;
   transform: translateY(-50%);
   color: #59837e;
-  font: 500 8px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    500 8px/1 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   letter-spacing: 0.06em;
 }
 
@@ -1933,7 +2083,11 @@ const simAltitudePercent = computed(() =>
   color: #7de6ca;
   border-bottom: 1px solid rgb(121 230 202 / 12%);
   background: rgb(16 36 42 / 62%);
-  font: 600 9.5px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    600 9.5px/1.4 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
 }
 
 .log ul {
@@ -1949,7 +2103,11 @@ const simAltitudePercent = computed(() =>
   display: flex;
   gap: 7px;
   padding: 3px 8px;
-  font: 400 10px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    400 10px/1.55 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
 }
 
 .log-time {
@@ -2038,7 +2196,11 @@ const simAltitudePercent = computed(() =>
 .toolbar-readout {
   margin-left: auto;
   color: #5f8b86;
-  font: 400 9.5px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    400 9.5px/1.4 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2102,6 +2264,7 @@ const simAltitudePercent = computed(() =>
   width: fit-content;
 }
 
+/* ————— 窄屏:右侧实时面板换行到底部 ————— */
 @media (max-width: 1280px) {
   .demo-body {
     grid-template-columns: 180px minmax(0, 1fr);

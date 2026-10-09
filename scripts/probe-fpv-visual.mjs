@@ -15,6 +15,7 @@ const page = await browser.newPage({ viewport: { width: 1200, height: 800 } })
 page.on('pageerror', (e) => console.log('[pageerror]', e.message))
 await page.goto(URL, { waitUntil: 'domcontentloaded' })
 await page.waitForFunction('window.__djiDebug?.fly?.rig', undefined, { timeout: 120000 })
+// 等机臂完全展开再量:收纳态下桨叶收起,电机/机头的 z 坐标不具代表性
 await page.waitForFunction('window.__djiDebug.fly.rig.armFold > 0.999', undefined, { timeout: 30000 })
 await page.waitForTimeout(800)
 
@@ -31,6 +32,7 @@ const geo = await page.evaluate(() => {
     const n = model.getObjectByName(name)
     return n ? Number(n.getWorldPosition(new THREE.Vector3()).x.toFixed(3)) : null
   }
+  // 机身包围盒按网格名前缀(BODY/GEAR/ARM)聚合;世界系 -Z 为机头(与电机 z 对照)
   const bodyBox = new THREE.Box3()
   model.traverse((o) => {
     if (o.isMesh && /BODY|GEAR|ARM/.test(o.name)) bodyBox.expandByObject(o)

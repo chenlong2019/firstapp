@@ -1,12 +1,19 @@
 <template>
   <main class="sandbox" data-testid="sandbox-root">
+    <!-- 三维视口:底层 three-engine 往此处挂 canvas;四周暗角用于压边 -->
     <div ref="viewportRef" class="viewport" aria-label="DJI 飞行沙盒三维视口"></div>
     <div class="vignette"></div>
     <!-- 拍照快门闪光:盖住取景切换的那一帧 -->
-    <div v-if="shutterFlash" class="shutter-flash" data-testid="shutter-flash" aria-hidden="true"></div>
+    <div
+      v-if="shutterFlash"
+      class="shutter-flash"
+      data-testid="shutter-flash"
+      aria-hidden="true"
+    ></div>
 
     <!-- ═══════════════════════ 左侧:分页面板 ═══════════════════════ -->
     <aside class="panel panel-left">
+      <!-- 面板抬头与分页标签(飞行 / 航线 / 灯光 / 参数 / 故障 / 模型) -->
       <div class="panel-head">
         <span>DJI MINI 4 PRO</span>
         <small>飞行测试沙盒</small>
@@ -122,7 +129,11 @@
               <em>{{ okCount }}/{{ snap.checklist.length }}</em>
             </div>
             <ul class="checklist" data-testid="checklist">
-              <li v-for="item in snap.checklist" :key="item.id" :class="{ bad: !item.ok, blocking: item.blocking && !item.ok }">
+              <li
+                v-for="item in snap.checklist"
+                :key="item.id"
+                :class="{ bad: !item.ok, blocking: item.blocking && !item.ok }"
+              >
                 <i class="dot"></i>
                 <div>
                   <strong>{{ item.label }}</strong>
@@ -134,7 +145,9 @@
           </section>
 
           <section class="card">
-            <div class="card-title"><span>飞行警告</span><em>{{ snap.warnings.length }}</em></div>
+            <div class="card-title">
+              <span>飞行警告</span><em>{{ snap.warnings.length }}</em>
+            </div>
             <div v-if="snap.warnings.length" class="warn-list">
               <span v-for="text in snap.warnings" :key="text">{{ text }}</span>
             </div>
@@ -196,7 +209,12 @@
               >
                 执行航线
               </button>
-              <button type="button" data-testid="mission-pause" :disabled="!canPauseMission" @click="doPauseMission">
+              <button
+                type="button"
+                data-testid="mission-pause"
+                :disabled="!canPauseMission"
+                @click="doPauseMission"
+              >
                 暂停
               </button>
               <button
@@ -207,13 +225,22 @@
               >
                 继续
               </button>
-              <button type="button" data-testid="mission-stop" class="wide" :disabled="!canStopMission" @click="doStopMission">
+              <button
+                type="button"
+                data-testid="mission-stop"
+                class="wide"
+                :disabled="!canStopMission"
+                @click="doStopMission"
+              >
                 停止任务(原地悬停)
               </button>
             </div>
-            <p v-if="missionBlockReason" class="block-hint" data-testid="mission-block">{{ missionBlockReason }}</p>
+            <p v-if="missionBlockReason" class="block-hint" data-testid="mission-block">
+              {{ missionBlockReason }}
+            </p>
             <p class="fine-print">
-              地面直接点「执行航线」会先自动起飞,到 1.2 米后自动接上航线;空中启动同样从首个航点走起。
+              地面直接点「执行航线」会先自动起飞,到 1.2
+              米后自动接上航线;空中启动同样从首个航点走起。
               飞向首个航点与返航同款分段:先垂直调整到航点高度 → 水平飞过去 → 收到航点高度 →
               机头对准航线方向,之后才开始执行航线。执行中拨动摇杆会暂停任务并交回手动控制。
             </p>
@@ -298,7 +325,8 @@
               <span>循环执行(完成后回到第 1 个航点)</span>
             </label>
             <p class="fine-print">
-              曲线过点保持巡航速度、距航点 3 米就切向下一点,所以会忽略航点悬停;直线模式按刹车距离提前收油,过点更稳。
+              曲线过点保持巡航速度、距航点 3
+              米就切向下一点,所以会忽略航点悬停;直线模式按刹车距离提前收油,过点更稳。
             </p>
           </section>
 
@@ -312,7 +340,10 @@
                 <li
                   v-for="(row, index) in waypointDraft"
                   :key="index"
-                  :class="{ active: isActiveWaypoint(index), selected: sceneEdit.selectedIndex === index }"
+                  :class="{
+                    active: isActiveWaypoint(index),
+                    selected: sceneEdit.selectedIndex === index,
+                  }"
                   :data-testid="`waypoint-${index}`"
                   @click="selectWaypoint(index)"
                 >
@@ -387,7 +418,11 @@
                       />
                     </label>
                     <label class="wp-field">
-                      <input type="checkbox" :checked="row.gimbalOn" @change="onWaypointGimbalToggle(index, $event)" />
+                      <input
+                        type="checkbox"
+                        :checked="row.gimbalOn"
+                        @change="onWaypointGimbalToggle(index, $event)"
+                      />
                       <span>云台</span>
                       <input
                         class="wp-input"
@@ -402,8 +437,16 @@
                     </label>
                     <label class="wp-field">
                       <span>动作</span>
-                      <select class="wp-select" :value="row.action" @change="onWaypointActionChange(index, $event)">
-                        <option v-for="action in MISSION_ACTIONS" :key="action.key" :value="action.key">
+                      <select
+                        class="wp-select"
+                        :value="row.action"
+                        @change="onWaypointActionChange(index, $event)"
+                      >
+                        <option
+                          v-for="action in MISSION_ACTIONS"
+                          :key="action.key"
+                          :value="action.key"
+                        >
                           {{ action.label }}
                         </option>
                       </select>
@@ -415,13 +458,28 @@
               </ul>
             </fieldset>
             <div class="segmented three">
-              <button type="button" data-testid="mission-add" :disabled="!missionEditable" @click="addWaypoint">
+              <button
+                type="button"
+                data-testid="mission-add"
+                :disabled="!missionEditable"
+                @click="addWaypoint"
+              >
                 添加航点
               </button>
-              <button type="button" data-testid="mission-preset" :disabled="!missionEditable" @click="useDefaultMission">
+              <button
+                type="button"
+                data-testid="mission-preset"
+                :disabled="!missionEditable"
+                @click="useDefaultMission"
+              >
                 示例航线
               </button>
-              <button type="button" data-testid="mission-clear" :disabled="!missionEditable" @click="clearWaypoints">
+              <button
+                type="button"
+                data-testid="mission-clear"
+                :disabled="!missionEditable"
+                @click="clearWaypoints"
+              >
                 清空
               </button>
             </div>
@@ -459,7 +517,9 @@
                 </template>
               </span>
               <span v-else>未选中航点(在场景里点一下航点光柱)</span>
-              <em v-if="sceneEdit.dragging">{{ sceneEdit.mode === 'altitude' ? '调整高度中' : '移动中' }}</em>
+              <em v-if="sceneEdit.dragging">{{
+                sceneEdit.mode === 'altitude' ? '调整高度中' : '移动中'
+              }}</em>
               <em v-else-if="sceneEdit.enabled && !sceneEdit.active">{{ sceneEditBlockReason }}</em>
             </div>
             <div class="segmented three">
@@ -479,7 +539,9 @@
               >
                 飞机位置新增
               </button>
-              <button type="button" data-testid="scene-edit-frame" @click="frameMission">框住航线</button>
+              <button type="button" data-testid="scene-edit-frame" @click="frameMission">
+                框住航线
+              </button>
             </div>
             <div class="segmented two">
               <button
@@ -530,7 +592,9 @@
           <section class="card">
             <div class="card-title">
               <span>灯光控制</span>
-              <em class="badge" :class="{ on: lightAuto }">{{ lightAuto ? '自动跟随飞行状态' : '手动覆盖' }}</em>
+              <em class="badge" :class="{ on: lightAuto }">{{
+                lightAuto ? '自动跟随飞行状态' : '手动覆盖'
+              }}</em>
             </div>
             <button
               type="button"
@@ -543,7 +607,9 @@
           </section>
 
           <section class="card">
-            <div class="card-title"><span>尾部状态指示灯</span><em>{{ lights.statusKey }}</em></div>
+            <div class="card-title">
+              <span>尾部状态指示灯</span><em>{{ lights.statusKey }}</em>
+            </div>
             <div class="status-grid">
               <button
                 v-for="p in statusPatterns"
@@ -560,7 +626,9 @@
           </section>
 
           <section class="card">
-            <div class="card-title"><span>智能电池电量灯</span><em>{{ lights.batteryMode }}</em></div>
+            <div class="card-title">
+              <span>智能电池电量灯</span><em>{{ lights.batteryMode }}</em>
+            </div>
             <div class="battery-row">
               <span
                 v-for="(led, index) in lights.batteryLeds"
@@ -597,7 +665,9 @@
           </section>
 
           <section class="card">
-            <div class="card-title"><span>底部辅助照明灯</span><em>{{ lights.auxMode }}</em></div>
+            <div class="card-title">
+              <span>底部辅助照明灯</span><em>{{ lights.auxMode }}</em>
+            </div>
             <div class="segmented three">
               <button
                 v-for="m in AUX_MODES"
@@ -619,7 +689,9 @@
         <!-- ─────────── 参数 ─────────── -->
         <template v-else-if="tab === 'config'">
           <section class="card">
-            <div class="card-title"><span>飞行挡位</span><em>{{ snap.modeLabel }}</em></div>
+            <div class="card-title">
+              <span>飞行挡位</span><em>{{ snap.modeLabel }}</em>
+            </div>
             <div class="segmented three">
               <button
                 v-for="m in FLIGHT_MODE_LIST"
@@ -632,8 +704,9 @@
               </button>
             </div>
             <p class="fine-print">
-              水平 {{ currentModeSpec.horizontalSpeed }} m/s · 上升 {{ currentModeSpec.climbSpeed }} m/s · 下降
-              {{ currentModeSpec.descendSpeed }} m/s · 最大倾角 {{ currentModeSpec.maxTiltDeg }}°
+              水平 {{ currentModeSpec.horizontalSpeed }} m/s · 上升
+              {{ currentModeSpec.climbSpeed }} m/s · 下降 {{ currentModeSpec.descendSpeed }} m/s ·
+              最大倾角 {{ currentModeSpec.maxTiltDeg }}°
             </p>
           </section>
 
@@ -655,7 +728,9 @@
           </section>
 
           <section class="card">
-            <div class="card-title"><span>风场</span><em>{{ snap.windRelative }}</em></div>
+            <div class="card-title">
+              <span>风场</span><em>{{ snap.windRelative }}</em>
+            </div>
             <label class="slider-row">
               <span class="slider-label">风速</span>
               <input
@@ -683,7 +758,8 @@
               <strong>{{ config.windDirection }}°</strong>
             </label>
             <p class="fine-print">
-              风吹向 {{ cardinal(config.windDirection) }} · 抗风上限 {{ DRONE_SPEC.maxWindResistance }} m/s · 超过上限会提示风险
+              风吹向 {{ cardinal(config.windDirection) }} · 抗风上限
+              {{ DRONE_SPEC.maxWindResistance }} m/s · 超过上限会提示风险
             </p>
           </section>
 
@@ -743,7 +819,9 @@
           </section>
 
           <section class="card">
-            <div class="card-title"><span>时间倍速</span><em>{{ config.timeScale }}×</em></div>
+            <div class="card-title">
+              <span>时间倍速</span><em>{{ config.timeScale }}×</em>
+            </div>
             <div class="segmented four">
               <button
                 v-for="scale in TIME_SCALES"
@@ -761,7 +839,12 @@
           <section class="card">
             <div class="card-title"><span>电池快捷设置</span><em>DEBUG</em></div>
             <div class="segmented four">
-              <button v-for="level in BATTERY_PRESETS" :key="level" type="button" @click="setBattery(level)">
+              <button
+                v-for="level in BATTERY_PRESETS"
+                :key="level"
+                type="button"
+                @click="setBattery(level)"
+              >
                 {{ level }}%
               </button>
             </div>
@@ -783,7 +866,10 @@
                 <button
                   type="button"
                   class="switch-row"
-                  :class="{ on: faults[item.key], danger: faults[item.key] && item.severity === 'error' }"
+                  :class="{
+                    on: faults[item.key],
+                    danger: faults[item.key] && item.severity === 'error',
+                  }"
                   :data-testid="`fault-${item.key}`"
                   @click="toggleFault(item.key)"
                 >
@@ -800,13 +886,19 @@
           <section class="card">
             <div class="card-title"><span>失效保护时序</span><em>AUTO</em></div>
             <ul class="timeline">
-              <li :class="{ armed: faults.rcLost }">遥控失联 3 秒 → 按配置执行返航 / 悬停 / 降落</li>
+              <li :class="{ armed: faults.rcLost }">
+                遥控失联 3 秒 → 按配置执行返航 / 悬停 / 降落
+              </li>
               <li :class="{ armed: snap.lowBattery }">
                 电量 {{ config.lowBatteryPercent }}% → 10 秒倒计时后自动返航{{
-                  snap.lowBatteryCountdown > 0 ? `(剩 ${snap.lowBatteryCountdown.toFixed(0)} s)` : ''
+                  snap.lowBatteryCountdown > 0
+                    ? `(剩 ${snap.lowBatteryCountdown.toFixed(0)} s)`
+                    : ''
                 }}
               </li>
-              <li :class="{ armed: snap.criticalBattery }">电量 {{ config.criticalBatteryPercent }}% → 强制原地降落</li>
+              <li :class="{ armed: snap.criticalBattery }">
+                电量 {{ config.criticalBatteryPercent }}% → 强制原地降落
+              </li>
               <li :class="{ armed: snap.batteryPercent <= 0 }">电量耗尽 → 动力失效坠机</li>
             </ul>
           </section>
@@ -855,18 +947,22 @@
 
     <!-- ═══════════════════════ 右侧:HUD ═══════════════════════ -->
     <aside class="panel panel-right">
+      <!-- HUD 抬头:显示当前定位来源(GNSS / 姿态模式等) -->
       <div class="panel-head">
         <span>HUD</span>
         <small>{{ snap.positionSourceLabel }}</small>
       </div>
       <div class="panel-body">
+        <!-- HUD · 状态行:飞行阶段 / 电机 / 空中 / 录像,以及返航原因 -->
         <section class="card status-card">
           <div class="status-line">
             <span class="phase" data-testid="snap-phase">{{ snap.phaseLabel }}</span>
             <span class="chips">
               <em class="badge" :class="{ on: snap.motorsOn }">电机</em>
               <em class="badge" :class="{ on: snap.airborne }">空中</em>
-              <em v-if="snap.recording" class="badge rec">REC {{ formatClock(snap.recordSeconds) }}</em>
+              <em v-if="snap.recording" class="badge rec"
+                >REC {{ formatClock(snap.recordSeconds) }}</em
+              >
             </span>
           </div>
           <div class="status-sub">
@@ -874,15 +970,20 @@
             <span>{{ snap.positionSourceLabel }}</span>
             <span>{{ snap.windRelative }} {{ snap.windSpeed.toFixed(1) }} m/s</span>
           </div>
-          <div v-if="snap.rthReason" class="status-sub alt">返航原因:{{ snap.rthReason }} · {{ rthStageLabel }}</div>
+          <div v-if="snap.rthReason" class="status-sub alt">
+            返航原因:{{ snap.rthReason }} · {{ rthStageLabel }}
+          </div>
         </section>
 
+        <!-- HUD · 遥测:高度/速度/航向/坐标等只读读数(由 100ms 快照刷新) -->
         <section class="card">
           <div class="card-title"><span>遥测</span><em>TELEMETRY</em></div>
           <div class="telemetry">
             <div class="cell">
               <span>高度 AGL</span>
-              <strong data-testid="snap-altitude">{{ snap.altitude.toFixed(2) }}<small>m</small></strong>
+              <strong data-testid="snap-altitude"
+                >{{ snap.altitude.toFixed(2) }}<small>m</small></strong
+              >
             </div>
             <div class="cell">
               <span>水平速度</span>
@@ -890,7 +991,9 @@
             </div>
             <div class="cell">
               <span>垂直速度</span>
-              <strong :class="vSpeedClass">{{ signed(snap.verticalSpeed, 2) }}<small>m/s</small></strong>
+              <strong :class="vSpeedClass"
+                >{{ signed(snap.verticalSpeed, 2) }}<small>m/s</small></strong
+              >
             </div>
             <div class="cell">
               <span>距返航点</span>
@@ -898,7 +1001,9 @@
             </div>
             <div class="cell">
               <span>航向</span>
-              <strong>{{ snap.heading.toFixed(0) }}°<small>{{ cardinal(snap.heading) }}</small></strong>
+              <strong
+                >{{ snap.heading.toFixed(0) }}°<small>{{ cardinal(snap.heading) }}</small></strong
+              >
             </div>
             <div class="cell">
               <span>最高高度</span>
@@ -911,7 +1016,12 @@
           </div>
         </section>
 
-        <section v-if="snap.mission.status !== 'idle' || snap.mission.total" class="card" data-testid="hud-mission">
+        <!-- HUD · 航线任务进度:仅在任务非空闲或已有航点时显示 -->
+        <section
+          v-if="snap.mission.status !== 'idle' || snap.mission.total"
+          class="card"
+          data-testid="hud-mission"
+        >
           <div class="card-title">
             <span>航线任务</span>
             <em :class="missionTone">{{ snap.mission.statusLabel }}</em>
@@ -924,12 +1034,20 @@
             <span :style="{ width: `${missionPercent}%` }"></span>
           </div>
           <div class="mission-meta">
-            <div><span>剩余航程</span><strong>{{ snap.mission.distanceLeft.toFixed(0) }} m</strong></div>
-            <div><span>预计剩余</span><strong>{{ missionEtaText }}</strong></div>
-            <div><span>已执行</span><strong>{{ formatClock(snap.mission.elapsed) }}</strong></div>
+            <div>
+              <span>剩余航程</span><strong>{{ snap.mission.distanceLeft.toFixed(0) }} m</strong>
+            </div>
+            <div>
+              <span>预计剩余</span><strong>{{ missionEtaText }}</strong>
+            </div>
+            <div>
+              <span>已执行</span><strong>{{ formatClock(snap.mission.elapsed) }}</strong>
+            </div>
             <div>
               <span>目标高度</span>
-              <strong>{{ snap.mission.active ? `${snap.mission.active.altitude.toFixed(0)} m` : '—' }}</strong>
+              <strong>{{
+                snap.mission.active ? `${snap.mission.active.altitude.toFixed(0)} m` : '—'
+              }}</strong>
             </div>
           </div>
           <p v-if="snap.mission.pauseReason" class="brake-flag" data-testid="mission-pause-reason">
@@ -937,10 +1055,14 @@
           </p>
         </section>
 
+        <!-- HUD · 姿态仪 + 罗盘(纯 SVG 绘制,数据来自快照) -->
         <section class="card">
           <div class="instruments">
             <div class="instrument">
-              <div class="card-title"><span>姿态</span><em>{{ snap.tiltPitch.toFixed(1) }}° / {{ snap.tiltRoll.toFixed(1) }}°</em></div>
+              <div class="card-title">
+                <span>姿态</span
+                ><em>{{ snap.tiltPitch.toFixed(1) }}° / {{ snap.tiltRoll.toFixed(1) }}°</em>
+              </div>
               <svg class="attitude" viewBox="0 0 200 200" role="img" aria-label="姿态仪">
                 <defs>
                   <clipPath id="att-clip">
@@ -957,7 +1079,9 @@
                 </defs>
                 <circle cx="100" cy="100" r="80" fill="#0a141b" stroke="rgba(121,230,202,.22)" />
                 <g clip-path="url(#att-clip)">
-                  <g :transform="`rotate(${-snap.tiltRoll} 100 100) translate(0 ${snap.tiltPitch * PITCH_PX})`">
+                  <g
+                    :transform="`rotate(${-snap.tiltRoll} 100 100) translate(0 ${snap.tiltPitch * PITCH_PX})`"
+                  >
                     <rect x="-80" y="-320" width="360" height="420" fill="url(#att-sky)" />
                     <rect x="-80" y="100" width="360" height="420" fill="url(#att-ground)" />
                     <line x1="-80" y1="100" x2="280" y2="100" stroke="#d9fff4" stroke-width="1.6" />
@@ -969,7 +1093,15 @@
                       stroke-width="1.1"
                     >
                       <line x1="70" y1="100" x2="130" y2="100" />
-                      <text x="136" y="103.5" fill="rgba(226,255,247,.6)" stroke="none" font-size="10">{{ Math.abs(mark) }}</text>
+                      <text
+                        x="136"
+                        y="103.5"
+                        fill="rgba(226,255,247,.6)"
+                        stroke="none"
+                        font-size="10"
+                      >
+                        {{ Math.abs(mark) }}
+                      </text>
                     </g>
                   </g>
                 </g>
@@ -985,7 +1117,10 @@
               </svg>
             </div>
             <div class="instrument">
-              <div class="card-title"><span>罗盘</span><em>{{ homeBearing === null ? '无返航点' : `H ${homeBearing.toFixed(0)}°` }}</em></div>
+              <div class="card-title">
+                <span>罗盘</span
+                ><em>{{ homeBearing === null ? '无返航点' : `H ${homeBearing.toFixed(0)}°` }}</em>
+              </div>
               <svg class="attitude" viewBox="0 0 200 200" role="img" aria-label="罗盘">
                 <circle cx="100" cy="100" r="80" fill="#0a141b" stroke="rgba(121,230,202,.22)" />
                 <g :transform="`rotate(${-snap.heading} 100 100)`">
@@ -1025,26 +1160,46 @@
           </div>
         </section>
 
+        <!-- HUD · 智能电池:电量条 + 电压/电流/温度/剩余能量/可飞时间 -->
         <section class="card">
           <div class="card-title">
             <span>智能电池</span>
             <em :class="batteryTone">{{ snap.batteryModeText }}</em>
           </div>
           <div class="battery-bar">
-            <span :style="{ width: `${snap.batteryPercent}%`, background: batteryColor }" data-testid="snap-battery"></span>
+            <span
+              :style="{ width: `${snap.batteryPercent}%`, background: batteryColor }"
+              data-testid="snap-battery"
+            ></span>
           </div>
           <div class="battery-meta">
-            <div><span>电量</span><strong>{{ snap.batteryPercent.toFixed(1) }}%</strong></div>
-            <div><span>电压</span><strong>{{ snap.batteryVoltage.toFixed(2) }} V</strong></div>
-            <div><span>电流</span><strong>{{ snap.batteryCurrent.toFixed(2) }} A</strong></div>
-            <div><span>温度</span><strong>{{ snap.batteryTemp.toFixed(0) }} ℃</strong></div>
-            <div><span>剩余能量</span><strong>{{ snap.batteryWhLeft.toFixed(2) }} Wh</strong></div>
-            <div><span>可飞时间</span><strong>{{ snap.remainingMinutes.toFixed(1) }} min</strong></div>
+            <div>
+              <span>电量</span><strong>{{ snap.batteryPercent.toFixed(1) }}%</strong>
+            </div>
+            <div>
+              <span>电压</span><strong>{{ snap.batteryVoltage.toFixed(2) }} V</strong>
+            </div>
+            <div>
+              <span>电流</span><strong>{{ snap.batteryCurrent.toFixed(2) }} A</strong>
+            </div>
+            <div>
+              <span>温度</span><strong>{{ snap.batteryTemp.toFixed(0) }} ℃</strong>
+            </div>
+            <div>
+              <span>剩余能量</span><strong>{{ snap.batteryWhLeft.toFixed(2) }} Wh</strong>
+            </div>
+            <div>
+              <span>可飞时间</span><strong>{{ snap.remainingMinutes.toFixed(1) }} min</strong>
+            </div>
           </div>
         </section>
 
+        <!-- HUD · 信号与避障:GNSS / 遥控信号格、下视视觉、六向障碍距离,内含测距雷达 -->
         <section class="card">
-          <div class="card-title"><span>信号与避障</span><em>{{ snap.satellites.toFixed(0) }} 星 · HDOP {{ snap.hdop.toFixed(1) }}</em></div>
+          <div class="card-title">
+            <span>信号与避障</span
+            ><em>{{ snap.satellites.toFixed(0) }} 星 · HDOP {{ snap.hdop.toFixed(1) }}</em>
+          </div>
           <div class="signal-row">
             <span class="signal-label">GNSS</span>
             <i v-for="n in 5" :key="`g${n}`" class="bar" :class="{ on: n <= snap.gpsBars }"></i>
@@ -1055,31 +1210,57 @@
           </div>
           <div class="signal-row">
             <span class="signal-label">下视视觉</span>
-            <em class="badge" :class="{ on: snap.visionAvailable }">{{ snap.visionAvailable ? '可用' : '不可用' }}</em>
+            <em class="badge" :class="{ on: snap.visionAvailable }">{{
+              snap.visionAvailable ? '可用' : '不可用'
+            }}</em>
           </div>
           <div class="obstacle-grid">
-            <div v-for="item in obstacleCells" :key="item.label" class="obs-cell" :class="{ near: item.near }">
+            <div
+              v-for="item in obstacleCells"
+              :key="item.label"
+              class="obs-cell"
+              :class="{ near: item.near }"
+            >
               <span>{{ item.label }}</span>
               <strong>{{ item.text }}</strong>
             </div>
           </div>
-          <p v-if="snap.obstacle.braking" class="brake-flag">避障刹停中 · {{ snap.obstacle.brakingDirection }}</p>
+          <p v-if="snap.obstacle.braking" class="brake-flag">
+            避障刹停中 · {{ snap.obstacle.brakingDirection }}
+          </p>
           <div class="radar-block">
             <div class="radar-head">
               <span>测距雷达</span>
-              <em class="badge" :class="{ on: radar.detecting }">{{ radar.detecting ? '工作中' : '未上电' }}</em>
+              <em class="badge" :class="{ on: radar.detecting }">{{
+                radar.detecting ? '工作中' : '未上电'
+              }}</em>
             </div>
             <div class="radar-aim">
               <span class="radar-aim-label">镜头瞄准</span>
-              <button type="button" :class="{ on: radar.aim === 'forward' }" @click="setRadarAim('forward')">
+              <button
+                type="button"
+                :class="{ on: radar.aim === 'forward' }"
+                @click="setRadarAim('forward')"
+              >
                 正前方 / 正上方
               </button>
-              <button type="button" :class="{ on: radar.aim === 'sensor' }" @click="setRadarAim('sensor')">镜头面朝向</button>
+              <button
+                type="button"
+                :class="{ on: radar.aim === 'sensor' }"
+                @click="setRadarAim('sensor')"
+              >
+                镜头面朝向
+              </button>
             </div>
             <div class="radar-group">
               <span class="radar-group-label">前视 · {{ radar.range.toFixed(0) }} m</span>
               <div class="radar-rays">
-                <div v-for="ray in radarRays" :key="ray.label" class="radar-ray" :class="radarLevel(ray.hit)">
+                <div
+                  v-for="ray in radarRays"
+                  :key="ray.label"
+                  class="radar-ray"
+                  :class="radarLevel(ray.hit)"
+                >
                   <span>{{ ray.label }}</span>
                   <strong>{{ radarText(ray.hit) }}</strong>
                   <em>{{ radarLabel(ray.hit) }}</em>
@@ -1089,7 +1270,12 @@
             <div class="radar-group up">
               <span class="radar-group-label">上视 · {{ radar.upRange.toFixed(0) }} m</span>
               <div class="radar-rays">
-                <div v-for="ray in radarUpRays" :key="ray.label" class="radar-ray" :class="radarLevel(ray.hit)">
+                <div
+                  v-for="ray in radarUpRays"
+                  :key="ray.label"
+                  class="radar-ray"
+                  :class="radarLevel(ray.hit)"
+                >
                   <span>{{ ray.label }}</span>
                   <strong>{{ radarText(ray.hit) }}</strong>
                   <em>{{ radarLabel(ray.hit) }}</em>
@@ -1097,13 +1283,18 @@
               </div>
             </div>
             <p class="fine-print">
-              镜头可转向:默认转去看正前方/正上方(切换按钮即时生效,转动带过渡)。检测用官方视场锥(前视 90°×72°、上视左右 90°×前后 72°),同侧两镜头视场在中线重叠 → 正前方/正上方的细杆也不会从缝里漏掉。起点取模型镜头/孔位;仅供测距显示,刹停保护由飞控避障负责。
+              镜头可转向:默认转去看正前方/正上方(切换按钮即时生效,转动带过渡)。检测用官方视场锥(前视
+              90°×72°、上视左右 90°×前后 72°),同侧两镜头视场在中线重叠 →
+              正前方/正上方的细杆也不会从缝里漏掉。起点取模型镜头/孔位;仅供测距显示,刹停保护由飞控避障负责。
             </p>
           </div>
         </section>
 
+        <!-- HUD · 云台与相机:云台俯仰、变焦、录像/拍照与成片下载 -->
         <section class="card">
-          <div class="card-title"><span>云台与相机</span><em>{{ snap.cameraZoom.toFixed(1) }}×</em></div>
+          <div class="card-title">
+            <span>云台与相机</span><em>{{ snap.cameraZoom.toFixed(1) }}×</em>
+          </div>
           <label class="slider-row">
             <span class="slider-label">云台</span>
             <input
@@ -1144,10 +1335,17 @@
             </button>
           </div>
           <div class="segmented two">
-            <button type="button" data-testid="photo-button" :disabled="photoBusy" @click="takePhoto">
+            <button
+              type="button"
+              data-testid="photo-button"
+              :disabled="photoBusy"
+              @click="takePhoto"
+            >
               {{ photoBusy ? '拍摄中…' : `拍照(已拍 ${snap.photoCount} 张)` }}
             </button>
-            <button type="button" @click="toggleArms" :disabled="snap.airborne">机臂收纳 / 展开</button>
+            <button type="button" @click="toggleArms" :disabled="snap.airborne">
+              机臂收纳 / 展开
+            </button>
           </div>
           <div v-if="photoNote || recordNote || lastPhoto || lastRecording" class="capture-panel">
             <p v-if="recordNote" class="capture-note" data-testid="record-note">{{ recordNote }}</p>
@@ -1175,8 +1373,11 @@
           </p>
         </section>
 
+        <!-- HUD · 事件日志:按 info/warn/error 分级的最新事件流 -->
         <section class="card grow">
-          <div class="card-title"><span>事件日志</span><em>{{ snap.events.length }}</em></div>
+          <div class="card-title">
+            <span>事件日志</span><em>{{ snap.events.length }}</em>
+          </div>
           <ul class="event-log" data-testid="event-log">
             <li v-for="event in snap.events" :key="event.id" :class="event.level">
               <span class="t">{{ formatClock(event.time) }}</span>
@@ -1198,6 +1399,7 @@
         axis-v="升降 ↓ ↑"
         @move="onDialMove('left', $event)"
       />
+      <!-- 摇杆台中部:相机视角切换、复位与键盘快捷键提示 -->
       <div class="deck-center">
         <div class="deck-title">
           <span>相机视角</span>
@@ -1217,7 +1419,13 @@
         </div>
         <button type="button" class="wide mini-btn" @click="resetCamera">复位观察视角</button>
         <div class="deck-actions">
-          <button type="button" class="danger" :disabled="!canEmergency" :title="emergencyHint" @click="doEmergency">
+          <button
+            type="button"
+            class="danger"
+            :disabled="!canEmergency"
+            :title="emergencyHint"
+            @click="doEmergency"
+          >
             停桨
           </button>
           <button type="button" @click="doReset">重置</button>
@@ -1243,6 +1451,14 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * DJI Mini 4 Pro 飞行沙盒页面。
+ * 左侧设置面板分 5 个分页(飞行 / 航线 / 灯光 / 参数 / 故障 / 模型)下发飞控与仿真配置;
+ * 右侧 HUD 靠约 100ms 的定时快照轮询同步遥测、姿态/罗盘、电池、信号避障、云台相机与事件日志;
+ * 底部两只美国手虚拟摇杆(自回中),与键盘输入合成为一路杆量。
+ * 底层对接 src/lib/three-engine/:drone-sim(飞控)、drone-rig(机件)、drone-fly(装配与主循环)、
+ * drone-world(场景障碍)、drone-lights(灯光)、drone-radar(测距雷达)、mission-editor(航线编辑)。
+ */
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { GameInstance } from '../../lib/three-engine/game-instance'
 import { CAMERA_MODE_LIST } from '../../lib/three-engine/drone-fly'
@@ -1270,11 +1486,17 @@ import {
   type SimConfig,
 } from '../../lib/three-engine/drone-sim'
 import { STATUS_PATTERN_LIST, describeBatteryLevel } from '../../lib/three-engine/drone-lights'
-import type { AuxLightMode, BatteryLightMode, DroneLightsSnapshot, StatusLightKey } from '../../lib/three-engine/drone-lights'
+import type {
+  AuxLightMode,
+  BatteryLightMode,
+  DroneLightsSnapshot,
+  StatusLightKey,
+} from '../../lib/three-engine/drone-lights'
 import type { RigPartReport } from '../../lib/three-engine/drone-rig'
 import type { RadarAim, RadarHit, RadarSnapshot } from '../../lib/three-engine/drone-radar'
 import StickDial from './stick-dial.vue'
 
+// 三维引擎实例(挂载后才创建)与视口容器引用;ready 表示模型已加载完成
 let gameInstance: GameInstance | null = null
 const viewportRef = ref<HTMLElement | null>(null)
 const ready = ref(false)
@@ -1358,7 +1580,14 @@ const FAILSAFE_MODES: Array<{ key: SimConfig['rcFailsafe']; label: string }> = [
   { key: 'hover', label: '悬停' },
   { key: 'land', label: '降落' },
 ]
-const LIMIT_ROWS: Array<{ key: 'maxAltitude' | 'maxDistance'; label: string; min: number; max: number; step: number; unit: string }> = [
+const LIMIT_ROWS: Array<{
+  key: 'maxAltitude' | 'maxDistance'
+  label: string
+  min: number
+  max: number
+  step: number
+  unit: string
+}> = [
   { key: 'maxAltitude', label: '限高', min: 20, max: 500, step: 10, unit: ' m' },
   { key: 'maxDistance', label: '限距', min: 30, max: 2000, step: 10, unit: ' m' },
 ]
@@ -1368,13 +1597,28 @@ const FAULT_LIST: Array<{
   hint: string
   severity: 'error' | 'warn'
 }> = [
-  { key: 'gnssLost', label: 'GNSS 卫星丢失', hint: '降级为视觉定位;12 米以上进入姿态模式', severity: 'error' },
+  {
+    key: 'gnssLost',
+    label: 'GNSS 卫星丢失',
+    hint: '降级为视觉定位;12 米以上进入姿态模式',
+    severity: 'error',
+  },
   { key: 'compassError', label: '指南针受扰', hint: '航向持续漂移,需重新校准', severity: 'error' },
   { key: 'imuError', label: 'IMU 惯性测量单元异常', hint: '直接禁止起飞', severity: 'error' },
-  { key: 'motorFailure', label: '单电机动力衰减', hint: '机身缓慢自旋,飞控持续修正', severity: 'warn' },
+  {
+    key: 'motorFailure',
+    label: '单电机动力衰减',
+    hint: '机身缓慢自旋,飞控持续修正',
+    severity: 'warn',
+  },
   { key: 'rcLost', label: '遥控器信号丢失', hint: '3 秒后触发失效保护', severity: 'error' },
   { key: 'visionLost', label: '下视视觉失效', hint: '低空无法视觉定位', severity: 'warn' },
-  { key: 'obstacleAvoidanceOff', label: '关闭避障', hint: '不再自动刹停,可能撞上障碍物', severity: 'warn' },
+  {
+    key: 'obstacleAvoidanceOff',
+    label: '关闭避障',
+    hint: '不再自动刹停,可能撞上障碍物',
+    severity: 'warn',
+  },
 ]
 
 const statusPatterns = STATUS_PATTERN_LIST
@@ -1391,7 +1635,9 @@ const lights = reactive<DroneLightsSnapshot>({
   auxOn: false,
   auxLocked: true,
 })
+/** 定时轮询(约 100ms)取得的整机快照,HUD 与按钮可用性都读它 —— 不是每帧回调 */
 const snap = ref<DroneSnapshot>(emptySnapshot())
+/** 模型自检报告:每个语义节点的命中/可驱动情况 */
 const rigReport = ref<RigPartReport[]>([])
 const cameraMode = ref<CameraMode>('orbit')
 const lightAuto = ref(true)
@@ -1414,6 +1660,7 @@ const sceneEdit = ref<MissionEditState>({
 const waypointDraft = ref<WaypointDraftRow[]>([])
 /** 底部辅助照明灯的下向光束锥(默认不显示,勾选才画) */
 const showAuxBeam = ref(false)
+/** 测距雷达快照(前视/上视四条射线命中);随快照一并轮询刷新 */
 const radar = ref<RadarSnapshot>({
   detecting: false,
   left: null,
@@ -1424,6 +1671,7 @@ const radar = ref<RadarSnapshot>({
   upRange: 15,
   aim: 'forward',
 })
+// 两只虚拟摇杆的拖拽量(-1~1);键盘量另存 keyAxes,下发时两者相加
 const dialLeft = reactive({ x: 0, y: 0 })
 const dialRight = reactive({ x: 0, y: 0 })
 const keyAxes = reactive({ throttle: 0, yaw: 0, pitch: 0, roll: 0 })
@@ -1440,7 +1688,8 @@ const lastRecording = ref<{ url: string; name: string; size: number } | null>(nu
 // ————————————————————————————— 派生状态 —————————————————————————————
 
 const clamp = (value: number, min = -1, max = 1): number => Math.min(max, Math.max(min, value))
-const signed = (value: number, digits: number): string => `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`
+const signed = (value: number, digits: number): string =>
+  `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`
 
 const flowIndex = computed(() => {
   const phase = snap.value.phase
@@ -1509,17 +1758,27 @@ const nextStep = computed<{ text: string; tone: string }>(() => {
       return { text: '飞行器已落地,重新上电即可再次起飞', tone: 'warn' }
   }
 })
-const blockingItems = computed(() => snap.value.checklist.filter((item) => item.blocking && !item.ok))
+const blockingItems = computed(() =>
+  snap.value.checklist.filter((item) => item.blocking && !item.ok),
+)
 const okCount = computed(() => snap.value.checklist.filter((item) => item.ok).length)
 const takeoffBlockReason = computed(() =>
-  blockingItems.value.length ? `起飞被阻止:${blockingItems.value.map((item) => item.label).join('、')}` : '',
+  blockingItems.value.length
+    ? `起飞被阻止:${blockingItems.value.map((item) => item.label).join('、')}`
+    : '',
 )
 const activeFaultCount = computed(() => FAULT_LIST.filter((item) => faults[item.key]).length)
 const foundCount = computed(() => rigReport.value.filter((part) => part.found).length)
-const cameraModeLabel = computed(() => CAMERA_MODE_LIST.find((item) => item.key === cameraMode.value)?.label ?? '观察者')
+const cameraModeLabel = computed(
+  () => CAMERA_MODE_LIST.find((item) => item.key === cameraMode.value)?.label ?? '观察者',
+)
 const currentModeSpec = computed(() => FLIGHT_MODES[snap.value.mode])
-const vSpeedClass = computed(() => (snap.value.verticalSpeed > 0.05 ? 'up' : snap.value.verticalSpeed < -0.05 ? 'down' : ''))
-const batteryTone = computed(() => (snap.value.criticalBattery ? 'bad' : snap.value.lowBattery ? 'warn' : ''))
+const vSpeedClass = computed(() =>
+  snap.value.verticalSpeed > 0.05 ? 'up' : snap.value.verticalSpeed < -0.05 ? 'down' : '',
+)
+const batteryTone = computed(() =>
+  snap.value.criticalBattery ? 'bad' : snap.value.lowBattery ? 'warn' : '',
+)
 const batteryColor = computed(() => {
   if (snap.value.criticalBattery) return '#ff5b4a'
   if (snap.value.lowBattery) return '#ffc53d'
@@ -1660,9 +1919,13 @@ const rightKnob = computed(() => ({
 const canPowerToggle = computed(() =>
   snap.value.phase === 'powerOff' ? !snap.value.damaged : !snap.value.airborne,
 )
-const canStartMotors = computed(() => snap.value.phase === 'standby' && blockingItems.value.length === 0)
+const canStartMotors = computed(
+  () => snap.value.phase === 'standby' && blockingItems.value.length === 0,
+)
 const canTakeOff = computed(
-  () => (snap.value.phase === 'standby' || snap.value.phase === 'motorsOn') && blockingItems.value.length === 0,
+  () =>
+    (snap.value.phase === 'standby' || snap.value.phase === 'motorsOn') &&
+    blockingItems.value.length === 0,
 )
 const canLand = computed(() => snap.value.airborne || snap.value.phase === 'takingOff')
 const canRth = computed(() => snap.value.airborne && snap.value.phase !== 'rth')
@@ -1695,6 +1958,7 @@ const auxStatusText = computed(() => {
 
 // ————————————————————————————— 工具函数 —————————————————————————————
 
+/** 出厂态空快照:引擎尚未产出首帧时用它兜底,避免模板读到 undefined */
 function emptySnapshot(): DroneSnapshot {
   return {
     phase: 'powerOff',
@@ -1791,6 +2055,7 @@ function formatClock(seconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
 }
 
+/** 把方位角(0°=北,顺时针)就近映射到 8 个罗盘方位名 */
 const CARDINAL_NAMES = ['北', '东北', '东', '东南', '南', '西南', '西', '西北']
 function cardinal(degrees: number): string {
   const index = Math.round((((degrees % 360) + 360) % 360) / 45) % 8
@@ -1811,6 +2076,7 @@ function pushStick(): void {
   })
 }
 
+/** 旋钮拖拽回调:更新对应一侧的拖拽量,再与键盘量合成后下发 */
 function onDialMove(side: 'left' | 'right', payload: { x: number; y: number }): void {
   const target = side === 'left' ? dialLeft : dialRight
   target.x = payload.x
@@ -1818,6 +2084,7 @@ function onDialMove(side: 'left' | 'right', payload: { x: number; y: number }): 
   pushStick()
 }
 
+/** 键盘轴输入映射(美国手 Mode 2):W/S=升降、A/D=偏航、↑↓=俯仰、←→=横滚;value 为满杆方向 */
 const AXIS_KEYS: Record<string, { axis: 'throttle' | 'yaw' | 'pitch' | 'roll'; value: number }> = {
   w: { axis: 'throttle', value: 1 },
   s: { axis: 'throttle', value: -1 },
@@ -1829,16 +2096,19 @@ const AXIS_KEYS: Record<string, { axis: 'throttle' | 'yaw' | 'pitch' | 'roll'; v
   arrowright: { axis: 'roll', value: 1 },
 }
 
+/** 把 KeyboardEvent.key 统一转小写:'W'→'w'、'ArrowUp'→'arrowup',两条分支同归一,故查表键全用小写 */
 function normalizedKey(event: KeyboardEvent): string {
   return event.key.length === 1 ? event.key.toLowerCase() : event.key.toLowerCase()
 }
 
+/** 焦点落在输入框/下拉时视为"正在打字",此时不把按键当飞控快捷键拦截 */
 function isTextTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null
   if (!element?.tagName) return false
   return ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName)
 }
 
+/** 全局 keydown:先处理连续轴输入(方向键/WASD),再处理一次性快捷键(见底部快捷键提示) */
 function handleKeyDown(event: KeyboardEvent): void {
   const key = normalizedKey(event)
   const axis = AXIS_KEYS[key]
@@ -1908,6 +2178,7 @@ function handleKeyDown(event: KeyboardEvent): void {
   }
 }
 
+/** 抬起轴键即把该轴归零并重推摇杆(否则轴会保持在上一次的满杆值) */
 function handleKeyUp(event: KeyboardEvent): void {
   const axis = AXIS_KEYS[normalizedKey(event)]
   if (!axis) return
@@ -1931,6 +2202,7 @@ function releaseAllInput(): void {
 
 // ————————————————————————————— 飞控指令 —————————————————————————————
 
+/** 取飞控模拟器实例的快捷方式;未挂载/未就绪时返回 undefined,调用方需自行判空 */
 const sim = () => gameInstance?.droneFly?.sim
 
 function togglePower(): void {
@@ -1948,6 +2220,7 @@ function setArmFold(fold: number): void {
   gameInstance?.droneFly?.setArmFoldTarget(fold)
 }
 
+// 以下 do* 系列都是对飞控的单向指令透传,底层未就绪时静默忽略
 function doStartMotors(): void {
   sim()?.startMotors()
 }
@@ -1976,6 +2249,7 @@ function doEmergency(): void {
   sim()?.emergencyStop()
 }
 
+/** 重置沙盒:飞控回出厂态,同时清输入、航迹、相机视角与灯光手动覆盖 */
 function doReset(): void {
   const instance = sim()
   if (!instance) return
@@ -2118,7 +2392,9 @@ function currentWaypoints(): MissionWaypoint[] {
 function patchWaypoint(index: number, patch: Partial<MissionWaypoint>): void {
   const fly = gameInstance?.droneFly
   if (!fly) return
-  const list = currentWaypoints().map((waypoint, i) => (i === index ? { ...waypoint, ...patch } : waypoint))
+  const list = currentWaypoints().map((waypoint, i) =>
+    i === index ? { ...waypoint, ...patch } : waypoint,
+  )
   fly.setMission(list)
   syncUi()
 }
@@ -2132,7 +2408,9 @@ function onWaypointTextInput(index: number, key: WaypointNumberKey, event: Event
   const value = Number(raw)
   if (!Number.isFinite(value)) return
   const range = WAYPOINT_RANGES[key]
-  patchWaypoint(index, { [key]: Math.min(range.max, Math.max(range.min, value)) } as Partial<MissionWaypoint>)
+  patchWaypoint(index, {
+    [key]: Math.min(range.max, Math.max(range.min, value)),
+  } as Partial<MissionWaypoint>)
 }
 
 function onWaypointActionChange(index: number, event: Event): void {
@@ -2247,12 +2525,23 @@ function revealWaypointRow(index: number): void {
 
 // ————————————————————————————— 参数 / 故障 —————————————————————————————
 
+/** 同时写入本地 config(供滑块回显)与飞控内核 */
 function applyConfig(patch: Partial<SimConfig>): void {
   Object.assign(config, patch)
   gameInstance?.droneFly?.setConfig(patch)
 }
 
-function onConfigInput(key: 'maxAltitude' | 'maxDistance' | 'rthAltitude' | 'windSpeed' | 'windDirection' | 'lowBatteryPercent' | 'criticalBatteryPercent', event: Event): void {
+function onConfigInput(
+  key:
+    | 'maxAltitude'
+    | 'maxDistance'
+    | 'rthAltitude'
+    | 'windSpeed'
+    | 'windDirection'
+    | 'lowBatteryPercent'
+    | 'criticalBatteryPercent',
+  event: Event,
+): void {
   const value = Number((event.target as HTMLInputElement).value)
   applyConfig({ [key]: value } as Partial<SimConfig>)
 }
@@ -2320,6 +2609,7 @@ function toggleRecording(): void {
   })()
 }
 
+/** 拍照(云台取景):先亮快门闪光盖住取景切换帧,再取图并触发下载 */
 function takePhoto(): void {
   void (async () => {
     const fly = gameInstance?.droneFly
@@ -2387,6 +2677,7 @@ function attachRecordingSink(): void {
   }
 }
 
+/** 手动选灯语:只是覆盖底层按阶段/故障/电量自动映射的结果(不等于关闭自动) */
 function selectStatusPattern(key: StatusLightKey): void {
   lightAuto.value = false
   gameInstance?.droneFly?.setStatusLightPattern(key)
@@ -2411,6 +2702,7 @@ function onBatteryLevelInput(event: Event): void {
   gameInstance?.droneFly?.setBatteryLightLevel(value)
 }
 
+/** 把界面上各"显示…"开关统一下发到世界障碍、航线、雷达射线、照明光束与坐标轴 */
 function applyWorldVisibility(): void {
   gameInstance?.droneFly?.world?.setObstaclesVisible(showObstacles.value)
   gameInstance?.droneFly?.setMissionWaypointsVisible(showMissionWaypoints.value)
@@ -2432,8 +2724,13 @@ function clearTrail(): void {
 
 // ————————————————————————————— 同步 —————————————————————————————
 
+// HUD 与飞控同步用的定时器:约 100ms 一轮,刻意不依赖 requestAnimationFrame(低帧率下时序不可靠)
 let syncTimer: number | undefined
 
+/**
+ * 一轮同步:从引擎拉取最新快照并写入各响应式状态(挂载时先跑一次,之后每 100ms 一次)。
+ * 首帧负责 ready 置位、取模型自检报告并应用可见性。
+ */
 function syncUi(): void {
   if (!gameInstance) return
   if (!ready.value && gameInstance.ready) {
@@ -2481,6 +2778,7 @@ function keyAxesActive(): boolean {
   return Math.hypot(keyAxes.throttle, keyAxes.yaw, keyAxes.pitch, keyAxes.roll) > 0.001
 }
 
+/** 挂载:注册键盘/失焦监听,创建引擎实例并启动 100ms 同步定时器 */
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('keyup', handleKeyUp)
@@ -2492,6 +2790,7 @@ onMounted(() => {
   }
 })
 
+/** 卸载:移除监听、清定时器,并销毁引擎实例释放 WebGL 资源 */
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown)
   window.removeEventListener('keyup', handleKeyUp)
@@ -2523,6 +2822,7 @@ onUnmounted(() => {
     'Segoe UI',
     sans-serif;
 }
+/* ——— 三维视口与暗角、加载提示 ——— */
 .viewport {
   position: absolute;
   inset: 0;
@@ -4197,6 +4497,7 @@ button.mini:hover {
     monospace;
 }
 
+/* 窄屏(≤1400px)适配:收窄两侧面板,给中间摇杆台让出空间 */
 @media (max-width: 1400px) {
   .panel-left {
     width: 296px;

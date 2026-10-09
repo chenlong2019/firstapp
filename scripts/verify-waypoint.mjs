@@ -22,6 +22,7 @@ import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
+// 清掉大小写两种写法的代理环境变量,确保无头浏览器直连本机 127.0.0.1 服务
 delete process.env.HTTP_PROXY
 delete process.env.HTTPS_PROXY
 delete process.env.http_proxy
@@ -618,6 +619,7 @@ await page.evaluate(() => window.__djiDebug.fly.stopMission('回归脚本收尾'
 
 // ═══════════════ G. 控制台 ═══════════════
 section('G. 控制台')
+// 过滤已知噪声:WebGPU 回退告警、资源创建失败与废弃 API 提示都不算真正的报错
 const realErrors = errors.filter(
   (text) => !text.includes('WebGPU') && !text.includes('Error creating') && !text.includes('deprecated'),
 )

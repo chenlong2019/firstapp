@@ -1,8 +1,23 @@
+/**
+ * 模型查看器:导入/解析模型 → 建模型树 → 拾取高亮 → 光照 / 后处理 / 动画 / 骨架 / 爆炸图。
+ *
+ * 处于应用层:直接驱动 THREEViewer(场景基础设施)与 PostEffects(后处理管线),
+ * 是页面上"模型浏览器"的全部逻辑所在。
+ * 对外导出 GlbViewer 类 + 一组纯数据类型/接口 + DEFAULT_LIGHT_SETTINGS。
+ *
+ * 模型格式解析全部委托给 model-loaders(glb/gltf/fbx/obj/stl/ply/dae 统一成 scene+animations),
+ * 本文件只管"拿到 Object3D 之后"的事。类名与文件名沿用 GlbViewer/glb-viewer(页面路由也叫 /glb),
+ * 但它已不只支持 GLB。
+ */
 import * as THREE from 'three'
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
-import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
+import {
+  displayNameOf,
+  loadModelFromFiles,
+  loadModelFromUrl,
+  ModelLoadError,
+} from './model-loaders'
+import type { LoadedModel, ModelFormat } from './model-loaders'
 import { THREEViewer } from './three-viewer'
 import {
   PostEffects,
@@ -32,6 +47,7 @@ export interface GlbTreeNode {
   children: GlbTreeNode[]
 }
 
+/** 模型统计(页面"统计"面板展示用)。 */
 export interface GlbModelStats {
   fileName: string
   nodes: number
@@ -48,6 +64,7 @@ export interface GlbModelStats {
   radius: number
 }
 
+/** 单个节点的详情(选中后在页面信息面板展示)。 */
 export interface GlbNodeInfo {
   id: number
   name: string
@@ -73,6 +90,7 @@ export interface LightSettings {
 /** 选择来源:ui = 页面(模型树等)触发,pick = 3D 画布内拾取。 */
 export type GlbSelectSource = 'ui' | 'pick'
 
+/** 视图显示开关(网格 / 坐标轴 / 自动旋转 / 线框)。 */
 export interface GlbViewOptions {
   grid: boolean
   axes: boolean
@@ -83,6 +101,7 @@ export interface GlbViewOptions {
 /** 动画循环方式(与 three 的 LoopRepeat / LoopOnce / LoopPingPong 对应)。 */
 export type GlbAnimationLoopMode = 'repeat' | 'once' | 'pingpong'
 
+/** 动画播放状态快照(每帧推给页面时间轴,无需页面轮询)。 */
 export interface GlbAnimationState {
   names: string[]
   index: number
@@ -111,6 +130,7 @@ export interface GlbRigInfo {
   visible: boolean
 }
 
+/** 加载状态(推给页面 loading UI);progress 在资源未返回 content-length 时为 null。 */
 export interface GlbLoadStatus {
   state: 'idle' | 'loading' | 'ready' | 'error'
   fileName: string
@@ -125,6 +145,7 @@ export interface GlbExportResult {
   bytes: number
 }
 
+/** 默认光照装置:环境光/主光/补光/轮廓光强度 + 曝光(值 0 表示关闭该光源)。 */
 export const DEFAULT_LIGHT_SETTINGS: LightSettings = {
   ambient: 1.6,
   key: 2.2,
@@ -133,6 +154,7 @@ export const DEFAULT_LIGHT_SETTINGS: LightSettings = {
   exposure: 1,
 }
 
+// 页面光照滑块的上限(经 getLightLimits 暴露给 UI)
 const AMBIENT_LIGHT_MAX = 4
 const DIRECTIONAL_LIGHT_MAX = 6
 
@@ -173,6 +195,16 @@ const CLICK_MAX_DURATION_MS = 600
 function toMaterialList(material: THREE.Material | THREE.Material[]): THREE.Material[] {
   if (Array.isArray(material)) return material
   return [material]
+}
+
+/** 判断 object 是否落在 ancestor 的子树里(含自身);父子链任意深。 */
+function isDescendantOf(object: THREE.Object3D, ancestor: THREE.Object3D): boolean {
+  let current: THREE.Object3D | null = object
+  while (current) {
+    if (current === ancestor) return true
+    current = current.parent
+  }
+  return false
 }
 
 function kindOf(object: THREE.Object3D): GlbNodeKind {
@@ -260,6 +292,14 @@ export class GlbViewer {
   // —— 高亮状态(选中与悬停都走后渲染描边,不修改材质) ——
   private selectedId: number | null = null
   private hoverId: number | null = null
+  /** "只看当前部件"的隔离目标;null = 未开启。 */
+  private isolatedId: number | null = null
+  /**
+   * 进入隔离前的可见性快照。
+   * 必须存快照而不是"退出时全部设回 true":用户可能本来就手关了几个部件,
+   * 一刀切恢复成可见会把他的显隐设置抹掉。
+   */
+  private isolateSnapshot: Map<THREE.Object3D, boolean> | null = null
   /** 网格的原始材质(线框切换后据此恢复)。 */
   private baseMaterialByMesh = new WeakMap<THREE.Mesh, THREE.Material | THREE.Material[]>()
   private wireframeMaterial: THREE.MeshBasicMaterial | null = null
@@ -308,6 +348,9 @@ export class GlbViewer {
   }> = []
   private explodeAmount = 0
   private explodeMaxOffset = 0
+
+  /** 整机包围球半径(每次载入算一次):缩放上限以它为基准,保证"拉远永远能看全整机"。 */
+  private modelRadius = 1
 
   // —— 交互 ——
   private readonly raycaster = new THREE.Raycaster()
@@ -439,45 +482,47 @@ export class GlbViewer {
 
   // ————————————————————————————— 模型加载 —————————————————————————————
 
-  private createLoader(): GLTFLoader {
-    const loader = new GLTFLoader()
-    // Draco / meshopt 压缩模型需要对应解码器,否则解析直接失败
-    const dracoLoader = new DRACOLoader()
-    dracoLoader.setDecoderPath('/draco/')
-    loader.setDRACOLoader(dracoLoader)
-    loader.setMeshoptDecoder(MeshoptDecoder)
-    return loader
-  }
-
-  /** 从 URL 载入 GLB(示例模型走这条路径)。 */
+  /**
+   * 从 URL 载入模型(内置示例,或同目录带外部资源的模型)。
+   * 格式由扩展名决定,解析细节全部委托 model-loaders。
+   */
   async loadFromUrl(url: string, fileName?: string): Promise<void> {
-    const displayName = fileName ?? url.split('/').pop() ?? url
+    const displayName = fileName ?? displayNameOf(url)
     this.emitStatus('loading', displayName, 0)
     try {
-      const gltf = await this.createLoader().loadAsync(url, (event) => {
-        const total = event.total || 0
-        this.emitStatus('loading', displayName, total > 0 ? event.loaded / total : null)
+      const model = await loadModelFromUrl(url, fileName, {
+        onProgress: (progress) => this.emitStatus('loading', displayName, progress),
       })
-      await this.mount(gltf, displayName)
-      this.emitStatus('ready', displayName, 1)
+      await this.mount(model, model.fileName)
+      this.emitStatus('ready', model.fileName, 1)
     } catch (error) {
       this.emitError(displayName, error)
     }
   }
 
-  /** 从本地文件载入 GLB(拖拽或文件选择)。 */
-  async loadFromFile(file: File): Promise<void> {
-    this.emitStatus('loading', file.name, 0)
-    const objectUrl = URL.createObjectURL(file)
+  /**
+   * 从一组本地文件载入模型(拖拽或文件选择)。
+   * 多选是"外部资源"支持的关键:.mtl / 贴图 / .bin 一起选中才能被解析到,
+   * 只选模型本体时贴图会走默认材质(不报错,但外观不完整)。
+   */
+  async loadFromFiles(files: File[]): Promise<void> {
+    const list = Array.from(files)
+    const label = list[0]?.name ?? '模型'
+    this.emitStatus('loading', label, 0)
     try {
-      const gltf = await this.createLoader().loadAsync(objectUrl)
-      await this.mount(gltf, file.name)
-      this.emitStatus('ready', file.name, 1)
+      const model = await loadModelFromFiles(list, {
+        onProgress: (progress) => this.emitStatus('loading', label, progress),
+      })
+      await this.mount(model, model.fileName)
+      this.emitStatus('ready', model.fileName, 1)
     } catch (error) {
-      this.emitError(file.name, error)
-    } finally {
-      URL.revokeObjectURL(objectUrl)
+      this.emitError(label, error)
     }
+  }
+
+  /** 单文件载入(兼容旧调用点)。 */
+  async loadFromFile(file: File): Promise<void> {
+    await this.loadFromFiles([file])
   }
 
   private emitStatus(
@@ -494,6 +539,14 @@ export class GlbViewer {
   }
 
   private emitError(fileName: string, error: unknown): void {
+    // 加载层已把失败分成"选错文件"与"文件本身有问题"两类,前者原样提示(用户看得懂),
+    // 后者才需要带上底层解析信息
+    if (error instanceof ModelLoadError) {
+      const message =
+        error.code === 'parse' ? `解析失败:${error.message}` : error.message
+      this.onStatus?.({ state: 'error', fileName, progress: null, message })
+      return
+    }
     const raw = error instanceof Error ? error.message : String(error)
     const message = /draco|meshopt|ktx/i.test(raw)
       ? `解析失败:模型使用了压缩扩展,请确认解码器可用(${raw})`
@@ -502,16 +555,14 @@ export class GlbViewer {
   }
 
   /** 挂载新模型:清旧资源 → 归一化 → 建树 → 适配相机与环境。 */
-  private async mount(
-    gltf: { scene: THREE.Object3D; animations: THREE.AnimationClip[] },
-    fileName: string,
-  ): Promise<void> {
+  private async mount(model: LoadedModel, fileName: string): Promise<void> {
     if (!this.scene || this.destroyed) return
     this.clearHighlight()
     this.disposeModel()
 
-    const root = gltf.scene
-    root.name = root.name || fileName.replace(/\.(glb|gltf)$/i, '')
+    const root = model.scene
+    // 根节点名:模型自带就用自带的,否则用文件名去掉扩展名(文件名可能是 .fbx/.obj/.stl…)
+    root.name = root.name || fileName.replace(/\.[^.]+$/, '')
     root.traverse((object) => {
       const mesh = object as THREE.Mesh
       if (mesh.isMesh || (object as THREE.SkinnedMesh).isSkinnedMesh) {
@@ -527,13 +578,15 @@ export class GlbViewer {
 
     root.updateMatrixWorld(true)
     const box = new THREE.Box3().setFromObject(root)
+    // 缩放范围要用整机半径做基准,必须在 fitCameraToBox 之前量好
+    this.modelRadius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 1e-3)
     this.fitEnvironment(box)
     this.buildTree()
     // 骨架要在统计与动画之前建好:统计要报骨节数,动画辅助线要在静止姿态下量测
     this.buildRig()
-    this.collectStats(gltf.animations.length)
+    this.collectStats(model.animations.length)
     this.setupExplodeParts()
-    this.setupAnimations(gltf.animations)
+    this.setupAnimations(model.animations)
     this.fitCameraToBox(box)
   }
 
@@ -960,12 +1013,32 @@ export class GlbViewer {
     const distance = (radius * factor) / Math.sin(halfFov)
     const direction = new THREE.Vector3(1, 0.72, 1).normalize()
 
+    this.applyZoomRange(radius, distance)
+
     this.controls.target.copy(sphere.center)
     this.camera.position.copy(sphere.center).addScaledVector(direction, distance)
+    // near/far 随观察距离自适应:模型尺度可能跨几个数量级,固定值会 z-fighting 或被裁掉
     this.camera.near = Math.max(distance / 600, 0.0005)
     this.camera.far = Math.max(distance * 12, 200)
     this.camera.updateProjectionMatrix()
     this.controls.update()
+  }
+
+  /**
+   * 让 OrbitControls 的缩放范围跟随模型尺度。
+   *
+   * OrbitControls 出厂值是 min 2.2 / max 160,按"米级"场景写死的;而 FBX 常以**厘米**为单位
+   * (人物包围球半径可达上百),取景所需距离会超过 maxDistance —— 相机被夹到 maxDistance 上
+   * (等于被塞进模型内部),此时滚轮拉远毫无反应,表现为"加载完几乎不能缩放"。
+   * 故:下限按当前取景半径(凑近看小部件),上限按整机半径(拉远永远能看全整机)。
+   */
+  private applyZoomRange(radius: number, distance: number): void {
+    if (!this.controls) return
+    const modelRadius = Math.max(this.modelRadius, radius)
+    const min = Math.max(radius * 0.05, modelRadius * 0.01, 0.0005)
+    const max = Math.max(distance * 5, modelRadius * 12, min * 20)
+    this.controls.minDistance = min
+    this.controls.maxDistance = max
   }
 
   setGridVisible(visible: boolean): void {
@@ -1014,10 +1087,88 @@ export class GlbViewer {
   setNodeVisible(id: number, visible: boolean): void {
     const object = this.nodeById.get(id)
     if (!object) return
+    // 手动改显隐意味着用户不再要"只看某个部件":先退出隔离再按他的意思改,
+    // 否则会出现"只看 A 却冒出一个 B"的矛盾画面
+    if (this.isolatedId !== null) this.isolate(null)
     object.visible = visible
     const node = this.treeIndex.get(id)
     if (node) node.visible = visible
     if (!visible) this.dropInvisibleHighlight()
+  }
+
+  // ————————————————————————————— 只看当前部件(隔离) —————————————————————————————
+
+  /** 当前被"只看"的节点 id;未开启隔离时为 null。 */
+  getIsolatedId(): number | null {
+    return this.isolatedId
+  }
+
+  /** 是否处于"只看当前部件"模式。 */
+  isIsolated(): boolean {
+    return this.isolatedId !== null
+  }
+
+  /**
+   * 只看某个部件:除"该部件及其祖先链"之外的部件全部隐藏;传 null 退出隔离。
+   *
+   * 祖先链必须留着可见 —— three.js 里父级不可见会连坐整棵子树,
+   * 把祖先也关掉的话目标部件自己也会跟着消失。
+   * 退出时按快照恢复(而不是全设可见),这样用户先前的显隐设置原样保留。
+   */
+  isolate(id: number | null): void {
+    if (id !== null && !this.nodeById.has(id)) return
+    // 换目标:先把上一次的隐藏还原,再基于"真实可见性"重新隔离
+    this.restoreIsolateSnapshot()
+
+    if (id === null) {
+      this.isolatedId = null
+      this.syncTreeVisibility()
+      this.dropInvisibleHighlight()
+      return
+    }
+    const target = this.nodeById.get(id)
+    this.isolatedId = target ? id : null
+    if (!target || !this.model) return
+
+    const keep = new Set<THREE.Object3D>()
+    let current: THREE.Object3D | null = target
+    while (current) {
+      keep.add(current)
+      if (current === this.model) break
+      current = current.parent
+    }
+
+    const snapshot = new Map<THREE.Object3D, boolean>()
+    this.model.traverse((child) => {
+      snapshot.set(child, child.visible)
+      if (keep.has(child) || isDescendantOf(child, target)) return
+      child.visible = false
+    })
+    // "只看"就要真看得见:目标自己或某个祖先本来就被人手关掉时,这里一并打开
+    // (原始可见性已在快照里,退出时照旧还原)
+    keep.forEach((object) => {
+      object.visible = true
+    })
+    this.isolateSnapshot = snapshot
+    this.syncTreeVisibility()
+    this.dropInvisibleHighlight()
+  }
+
+  /** 把隔离前的可见性快照写回,并丢弃快照。 */
+  private restoreIsolateSnapshot(): void {
+    if (!this.isolateSnapshot) return
+    this.isolateSnapshot.forEach((visible, object) => {
+      object.visible = visible
+    })
+    this.isolateSnapshot = null
+  }
+
+  /** 把对象上的 visible 回写到树节点(隔离会直接改对象,树节点得跟上)。 */
+  private syncTreeVisibility(): void {
+    this.nodeById.forEach((object, id) => {
+      const node = this.treeIndex.get(id)
+      if (node) node.visible = object.visible
+    })
   }
 
   /** 隐藏之后,落在整棵子树里的选中/悬停都不再可见,清掉以免描边挂在看不见的部件上。 */
@@ -1210,6 +1361,7 @@ export class GlbViewer {
     })
     this.rigLines = new THREE.LineSegments(geometry, material)
     this.rigLines.frustumCulled = false
+    // 与 depthTest:false 配合,骨架在所有实体之后绘制,始终可见
     this.rigLines.renderOrder = 5
     this.rigGroup = new THREE.Group()
     this.rigGroup.name = 'GLB_SkeletonHelper'
@@ -1534,6 +1686,7 @@ export class GlbViewer {
     const render = (timestamp: number): void => {
       this.frame = window.requestAnimationFrame(render)
       this.updateFps(timestamp)
+      // 单帧步进上限 0.1s:标签页切回或卡顿后不会一次跳太多,避免动画爆冲
       const delta = this.previousFrameTime
         ? Math.min((timestamp - this.previousFrameTime) / 1000, 0.1)
         : 1 / 60
@@ -1580,6 +1733,9 @@ export class GlbViewer {
   // ————————————————————————————— 释放 —————————————————————————————
 
   private disposeModel(): void {
+    // 隔离状态随模型一起失效:快照里的对象即将被释放,留着会对已释放节点写 visible
+    this.isolatedId = null
+    this.isolateSnapshot = null
     if (!this.model) return
     const materials = new Set<THREE.Material>()
     const textures = new Set<THREE.Texture>()
@@ -1613,6 +1769,7 @@ export class GlbViewer {
     this.disposeRig()
     this.explodeParts = []
     this.explodeAmount = 0
+    this.modelRadius = 1
     this.stats = null
     this.tree = []
     this.treeIndex.clear()

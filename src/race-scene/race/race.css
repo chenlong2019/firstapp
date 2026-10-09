@@ -1,0 +1,591 @@
+/*
+ * 海湾竞速场景的全部样式。
+ *
+ * 移植自上游 race.html 的内联样式:原先挂在 html/body 上的全局规则收进 .race-page
+ * 容器,避免污染 SPA 其他页面;所有选择器以 .race-page 或 #race-* 限定。
+ * 面板显隐统一靠 hidden 属性(见下方 [hidden] 规则),下面只说明各块职责,不逐条翻译属性。
+ */
+.race-page,
+.race-page *,
+.race-page *::before,
+.race-page *::after {
+  box-sizing: border-box;
+}
+/* 原为 html,body 全局样式;移植进 SPA 后收进 .race-page 容器,避免污染其他页面 */
+.race-page {
+  position: relative;
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b1418;
+  font-family: Inter, 'Microsoft YaHei', sans-serif;
+  color: #eef3f4;
+}
+/* hidden 属性必须压过组件自带的 display(flex 等),否则"关闭"的面板关不掉 */
+.race-page [hidden] {
+  display: none !important;
+}
+/* 画布容器:铺满 .race-page,canvas 由 three.js 注入并跟随容器尺寸 */
+#race-app,
+#race-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+#race-viewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+/* 左上角车辆读数卡:速度/帧率/转角/里程/车灯等 */
+.race-hud {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  min-width: 190px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #0d2028b8;
+  border: 1px solid #ffffff26;
+  backdrop-filter: blur(10px);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.race-hud-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.race-hud-row span {
+  color: #a9c0c8;
+}
+.race-hud-row strong {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.race-hud-note {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #ffffff1f;
+  color: #9fb6bd;
+  font-size: 11px;
+}
+/* 底部居中的按键提示条 */
+.race-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: #dfe9ecb0;
+  text-shadow: 0 1px 6px #06181f;
+  white-space: nowrap;
+}
+/* 居中的载入/错误状态浮层 */
+.race-status {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 14px 22px;
+  border-radius: 8px;
+  background: #0d2028d0;
+  border: 1px solid #ffffff26;
+  font-size: 13px;
+}
+
+/* 右上角按钮(设置/模型树):毛玻璃 + 半透明底 */
+.race-settings {
+  position: absolute;
+  right: 20px;
+  top: 20px;
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: 1px solid #ffffff2e;
+  background: #0d2028c4;
+  color: #eef3f4;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+.race-settings:hover {
+  background: #16323cc4;
+}
+/* 右上角设置面板:地图/车辆/无人机/开关/天气/车身/水面的分区容器 */
+.race-panel {
+  position: absolute;
+  right: 20px;
+  top: 64px;
+  width: 296px;
+  max-height: calc(100% - 96px);
+  overflow: auto;
+  padding: 16px 18px 18px;
+  border-radius: 12px;
+  background: #0d2028e6;
+  border: 1px solid #ffffff2e;
+  backdrop-filter: blur(14px);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.race-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.race-panel-head h1 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+.race-panel-head button {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid #ffffff26;
+  background: #ffffff14;
+  color: #eef3f4;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.race-panel-block {
+  padding: 10px 0;
+  border-top: 1px solid #ffffff1c;
+}
+.race-panel-block:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+.race-panel-label {
+  display: block;
+  margin-bottom: 7px;
+  color: #a9c0c8;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.race-panel-note {
+  color: #7d949c;
+}
+.race-panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.race-panel-row button,
+.race-panel-wide {
+  flex: 1 1 auto;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid #ffffff26;
+  background: #ffffff12;
+  color: #dfe9ec;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.race-panel-row button:hover,
+.race-panel-wide:hover {
+  background: #ffffff1f;
+}
+.race-panel-row input {
+  flex: 0 0 88px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid #ffffff26;
+  background: #08151b;
+  color: #eef3f4;
+  font: inherit;
+  font-size: 12px;
+}
+.race-panel-wide {
+  width: 100%;
+  margin-top: 8px;
+}
+.race-pick {
+  position: absolute;
+  left: 14px;
+  bottom: 56px;
+  max-width: 70%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #0b1a20d9;
+  border: 1px solid #ffffff2e;
+  color: #eaf6fb;
+  font:
+    12px/1.5 ui-monospace,
+    Consolas,
+    monospace;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+/* 右上角按钮组的横向排布,内部按钮取消各自绝对定位 */
+.race-tools {
+  position: absolute;
+  right: 20px;
+  top: 20px;
+  display: flex;
+  gap: 8px;
+}
+.race-tools .race-settings {
+  position: static;
+}
+/* 模型树面板:标题栏 + 搜索框 + 可滚动列表;与设置面板同区,靠 tree-open 错开 */
+.race-tree {
+  position: absolute;
+  right: 20px;
+  top: 64px;
+  width: 340px;
+  max-height: calc(100% - 96px);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 14px 10px;
+  border-radius: 12px;
+  background: #0d2028e6;
+  border: 1px solid #ffffff2e;
+  backdrop-filter: blur(14px);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.race-tree-count {
+  margin-left: 8px;
+  color: #9fb6bd;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+.race-tree-search {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid #ffffff26;
+  background: #08151b;
+  color: #eef3f4;
+  font: inherit;
+  font-size: 12px;
+}
+#race-tree-host {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.race-tree-list {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+.race-tree-list::-webkit-scrollbar {
+  width: 8px;
+}
+.race-tree-list::-webkit-scrollbar-track {
+  background: #ffffff0f;
+  border-radius: 4px;
+}
+.race-tree-list::-webkit-scrollbar-thumb {
+  background: #ffffff33;
+  border-radius: 4px;
+}
+.race-tree-list::-webkit-scrollbar-thumb:hover {
+  background: #ffffff52;
+}
+.race-tree-list {
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff40 transparent;
+}
+.race-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.race-tree-row:hover {
+  background: #ffffff14;
+}
+.race-tree-row.is-selected {
+  background: #1d4a5c;
+  color: #eaf6fb;
+}
+.race-tree-twisty {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #9fb6bd;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.race-tree-twisty:disabled {
+  color: #ffffff2e;
+  cursor: default;
+}
+.race-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.race-tree-meta {
+  margin-left: auto;
+  padding-left: 8px;
+  color: #8ea6ae;
+  font-size: 10px;
+}
+.race-tree-branch {
+  margin-left: 9px;
+  border-left: 1px solid #ffffff1f;
+  padding-left: 4px;
+}
+.race-tree-note {
+  color: #9fb6bd;
+  font-size: 11px;
+  padding: 4px 2px;
+}
+.race-tree-hint {
+  margin: 8px 0 0;
+  color: #8ea6ae;
+  font-size: 11px;
+  line-height: 1.5;
+}
+/* 树打开时把设置面板左移,避免两块面板重叠 */
+.race-page.tree-open .race-panel {
+  right: 376px;
+}
+/* 窄屏:模型树占满宽度,设置面板回到原位 */
+@media (max-width: 760px) {
+  .race-tree {
+    left: 14px;
+    right: 14px;
+    width: auto;
+    top: 104px;
+  }
+  .race-page.tree-open .race-panel {
+    right: 20px;
+  }
+}
+/* 面板内的复选项与滑块行(含右侧数值、禁用态) */
+.race-panel-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.race-panel-doors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}
+.race-panel-range {
+  cursor: default;
+  gap: 6px;
+}
+.race-panel-range input[type='range'] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 16px;
+  accent-color: #7fd3ff;
+}
+.race-panel-range b {
+  flex: 0 0 28px;
+  text-align: right;
+  color: #eef3f4;
+  font-weight: 600;
+}
+/* 面板内按钮的当前选中态(地图/车辆/镜头等切换按钮) */
+.race-panel-row button.is-active {
+  border-color: #7fd3ff8c;
+  background: #1d4a5c;
+  color: #eaf6fb;
+}
+/* 面板底部“操作”区的按键说明列表 */
+.race-panel-keys {
+  margin: 0;
+  padding-left: 16px;
+  color: #c6d5da;
+}
+.race-panel-keys li {
+  margin: 2px 0;
+}
+.race-panel-keys b {
+  color: #eef3f4;
+  font-weight: 600;
+}
+.race-panel-foot {
+  margin: 12px 0 0;
+  color: #7d949c;
+  font-size: 11px;
+}
+/* —— 无人机接管操控:读数卡与接管按钮 —— */
+.race-drone-hud {
+  position: absolute;
+  left: 20px;
+  bottom: 20px;
+  min-width: 238px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #0d2028cc;
+  border: 1px solid #ffffff26;
+  backdrop-filter: blur(10px);
+  font-size: 12px;
+  line-height: 1.6;
+  color: #eef3f4;
+}
+.race-drone-hud-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #ffffff1f;
+  color: #8fe3c8;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+.race-drone-hud-head b {
+  color: #eef3f4;
+  font-weight: 600;
+}
+.race-drone-hud-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.race-drone-hud-row span {
+  color: #a9c0c8;
+}
+.race-drone-hud-row strong {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.race-drone-hud-warning {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #ffffff1f;
+  color: #ffc53d;
+  font-size: 11px;
+}
+.race-drone-hud-keys {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #ffffff1f;
+  color: #9fb6bd;
+  font-size: 11px;
+  line-height: 1.75;
+}
+.race-drone-hud-keys b {
+  color: #cfe6ee;
+  font-weight: 600;
+}
+.race-drone-pilot.active {
+  background: #1d5f4f;
+  border-color: #3fd0a4;
+  color: #eafff7;
+}
+/* 小屏:整体缩水的 HUD 与面板 */
+@media (max-width: 600px) {
+  .race-hud {
+    left: 12px;
+    top: 12px;
+    min-width: 150px;
+    padding: 10px 12px;
+    font-size: 11px;
+  }
+  .race-hint {
+    font-size: 10px;
+    white-space: normal;
+    width: 92%;
+    text-align: center;
+  }
+  .race-settings {
+    right: 12px;
+    top: 12px;
+    padding: 7px 12px;
+  }
+  .race-panel {
+    right: 12px;
+    left: 12px;
+    width: auto;
+    top: 56px;
+  }
+}
+
+/* —— 摇杆量与云台读数:证明"按键真的进了飞控",也方便一眼看出杆位 —— */
+.race-drone-hud-stick {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 8px 0 2px;
+  padding-top: 8px;
+  border-top: 1px solid #ffffff1f;
+}
+.race-stick {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.race-stick-bar {
+  position: relative;
+  display: block;
+  width: 10px;
+  height: 38px;
+  border-radius: 3px;
+  background: #ffffff1f;
+  overflow: hidden;
+}
+.race-stick-bar i {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: 3px;
+  background: #48d597;
+}
+.race-stick em {
+  font-style: normal;
+  font-size: 10px;
+  color: #9fb3b8;
+}
+.race-stick-cam {
+  margin-left: auto;
+  padding-bottom: 2px;
+  font-size: 11px;
+  color: #a9c0c8;
+}
+.race-stick-cam b {
+  color: #eef3f4;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+/* 场景内短提示浮层(误按键、接管失败等反馈) */
+.race-drone-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 52px;
+  transform: translateX(-50%);
+  max-width: min(560px, 86%);
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: #0d2028e6;
+  border: 1px solid #3fd0a466;
+  color: #cfe6ee;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 6px 18px #06181f66;
+  z-index: 12;
+}

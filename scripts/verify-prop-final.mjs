@@ -2,6 +2,10 @@
  * 终验:展开机臂 → 上电 → 起飞 → 悬停近景。
  * 验证:1) 无浅白色桨盘 2) 桨叶法线与电机轴夹角 = 出厂桨距 ~15°(对称)
  * 3) 展开态钟罩轴与自转轴同轴
+ *
+ * 用法:node scripts/verify-prop-final.mjs [url](默认 http://127.0.0.1:15186/dji)
+ * 前置:先构建并用 vite preview 起产物服务;断言主要看控制台打印的法线夹角,阈值宽松。
+ * 坑:本脚本用 SwiftShader 软件渲染起浏览器(与其它 verify 脚本的 GPU 参数不同)。
  */
 import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
@@ -11,6 +15,7 @@ const URL = process.argv[2] ?? 'http://127.0.0.1:15186/dji'
 const SHOT_DIR = join(process.cwd(), '.verify-shots')
 mkdirSync(SHOT_DIR, { recursive: true })
 
+// 用 ANGLE/SwiftShader 软件渲染跑离屏取景,避开无头环境 GPU 取景异常
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] })
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 page.on('pageerror', (e) => console.log('[pageerror]', e.message))
@@ -35,6 +40,7 @@ const expanded = await page.evaluate(() => {
   const fitAxis = (obj) => {
     const attr = obj.geometry.getAttribute('position')
     const pts = []
+    // 顶点过多时按 ~800 点抽样,控制 PCA 的取样量与耗时
     const step = Math.max(1, Math.floor(attr.count / 800))
     for (let i = 0; i < attr.count; i += step) {
       pts.push(new THREE.Vector3().fromBufferAttribute(attr, i).applyMatrix4(obj.matrixWorld))
@@ -58,6 +64,7 @@ const expanded = await page.evaluate(() => {
       const l = Math.hypot(v[0], v[1], v[2]) || 1
       return [v[0] / l, v[1] / l, v[2] / l]
     }
+    // 幂迭代求协方差矩阵主特征向量:即桨叶盘面的法线方向(300 次足够收敛)
     let v = [1, 0.3, 0.7]
     for (let i = 0; i < 300; i += 1) v = norm(mul(v))
     const lam1 = v[0] * mul(v)[0] + v[1] * mul(v)[1] + v[2] * mul(v)[2]
@@ -69,6 +76,7 @@ const expanded = await page.evaluate(() => {
     const lam3 = third[0] * mul(third)[0] + third[1] * mul(third)[1] + third[2] * mul(third)[2]
     return new THREE.Vector3(...(lam3 < lam2 ? third : w)).normalize()
   }
+  // 取 dot 的绝对值:法线正负视为同向,得到无符号夹角(故断言说"对称")
   const ang = (a, b) => THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(a.dot(b)))))
   const res = { props: [], ringDiscs: 0 }
   for (const pos of ['FrontLeft', 'FrontRight', 'RearLeft', 'RearRight']) {

@@ -1,14 +1,25 @@
+/**
+ * 飞行场景的本地公制坐标系统(坐标换算 / 单位与精度工具)。
+ *
+ * 把 three.js 世界坐标当米使用,为遥测与场景提供统一单位与 2 位小数精度,
+ * 并支持相对原点的本地坐标 <-> 世界坐标互转。纯工具,不含飞控逻辑。
+ * 注意:所有返回值都已四舍五入,不要拿它做逐帧差分的积分累加。
+ */
 import * as THREE from 'three'
 
+/** 本工程的坐标单位:米 */
 export const PROJ_UNIT = 'm' as const
+/** 默认保留的小数位数(2 位 = 厘米级),遥测与场景坐标共用 */
 export const PROJ_PRECISION = 2
 
+/** 本地坐标系下的直角坐标:与 three.js 一致,x 向东、y 向上、z 向南(单位米) */
 export interface ProjCoordinate {
   x: number
   y: number
   z: number
 }
 
+/** 坐标入参的宽松形式:普通对象、THREE.Vector3 或三元组 */
 export type ProjCoordinateInput = ProjCoordinate | THREE.Vector3 | readonly [number, number, number]
 
 /**
@@ -75,6 +86,7 @@ export class ProjSystem {
 
   private round(value: number): number {
     const factor = 10 ** this.precision
+    // +Number.EPSILON:补偿二进制浮点误差(否则 1.005 会被截成 1.00)
     return Math.round((value + Number.EPSILON) * factor) / factor
   }
 

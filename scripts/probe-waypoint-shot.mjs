@@ -1,3 +1,9 @@
+/**
+ * 截图探针:航线执行流程的四个机位照(编辑器 / 标记与航线 / 飞行中 / 机载视角)。
+ * 用法:先起 dev server(vite preview 产物),再 `node scripts/probe-waypoint-shot.mjs`(地址写死 15186/dji)。
+ * 产物:.verify-shots/waypoint-0*.png;末尾打印 RUNNING STATE(进度/剩余距离/ETA/照片数)。
+ * 坑:截图前必须等机臂完全展开,且靠 phase/missionIndex 轮询推进——约 2FPS 下固定 sleep 会抓空。
+ */
 import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -16,6 +22,7 @@ page.on('pageerror', (e) => console.log('[pageerror]', e.message))
 
 await page.goto('http://127.0.0.1:15186/dji', { waitUntil: 'domcontentloaded' })
 await page.waitForFunction('window.__djiDebug?.fly?.rig', undefined, { timeout: 120000 })
+// 先让机臂展开,后续所有截图都基于展开飞行态
 await page.evaluate(() => window.__djiDebug.fly.setArmFoldTarget(0))
 await page.waitForFunction('window.__djiDebug.fly.rig.armFold < 0.02', undefined, { timeout: 30000 })
 await page.waitForTimeout(1200)
@@ -29,6 +36,7 @@ await page.screenshot({ path: join(DIR, 'waypoint-01-editor.png') })
 await page.click('[data-testid="tab-flight"]')
 await page.click('[data-testid="btn-power"]')
 await page.waitForFunction('window.__djiDebug.fly.sim.phase === "standby"', undefined, { timeout: 60000 })
+// 拉到 2 倍速缩短等待;卡点仍按 phase/索引轮询,不靠固定 sleep(约 2FPS)
 await page.evaluate(() => window.__djiDebug.fly.setConfig({ timeScale: 2 }))
 await page.click('[data-testid="tab-mission"]')
 await page.waitForTimeout(300)

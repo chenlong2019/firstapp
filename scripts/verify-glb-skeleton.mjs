@@ -22,6 +22,7 @@ delete process.env.http_proxy
 delete process.env.https_proxy
 
 const URL = process.argv[2] ?? 'http://127.0.0.1:15176/glb'
+// 仅当 SHOTS=1 才落盘截图,平时回归不产生文件
 const SHOTS = process.env.SHOTS === '1'
 const DIR = join(process.cwd(), '.verify-shots')
 mkdirSync(DIR, { recursive: true })
@@ -138,6 +139,7 @@ const pose = await page.evaluate(async () => {
   }
   await v.seek(0)
   const folded = read()
+  // 3.2s = 动画时长(6.4s)的半程,此处机臂完全展开
   await v.seek(3.2)
   const unfolded = read()
   await v.seek(0)
@@ -232,6 +234,7 @@ const skeleton = await page.evaluate(async () => {
   const nonZero = Array.from(positions.array).some((n) => Math.abs(n) > 1e-6)
   v.setSkeletonVisible(false)
   const visibleAfterOff = v.rigGroup.visible
+  // 连等两帧 rAF,确认关闭状态已被渲染循环消费(只等一帧可能读到旧值)
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
   return {
     visibleAfterOn,

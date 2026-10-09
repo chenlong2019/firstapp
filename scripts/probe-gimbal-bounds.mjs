@@ -90,6 +90,7 @@ function nodeWorldBounds(nodeIndex) {
   return { min: min.map((v) => Number(v.toFixed(2))), max: max.map((v) => Number(v.toFixed(2))) }
 }
 
+// 要清算包围盒的网格名——云台活动件 + 机身安装座,用于判断活动范围是否撞到座
 const targets = [
   'GIMBAL_BlackCameraShell',
   'GIMBAL_CameraHousing',
@@ -100,6 +101,7 @@ const targets = [
   'BODY_Main_Fuselage',
   'SENSOR_Glass_Downward',
 ]
+// [1] 各目标网格在根空间的包围盒(不含整机摆放);min/max 为模型内部单位
 console.log('===== CTRL_DJI_Root 空间的网格包围盒(min/max) =====')
 for (const [i, n] of nodes.entries()) {
   if (!targets.includes(n.name)) continue

@@ -21,6 +21,11 @@ const GIMBAL_OFFSET = 0.12
 /** 观察者视角下相机故意摆得离飞机很远,用来区分"用户视角帧"和"云台取景帧" */
 const ORBIT_POSITION = new THREE.Vector3(6, 3.5, 7)
 
+/**
+ * 组装一个最小录像环境:假渲染器记录每次 render 时的相机位置(即"这一帧拍到了什么"),
+ * 假云台只回传固定位姿;录制画布与轨道占位在构造后由 setTrack 注入,供各用例断言。
+ * @param gimbalReady 云台位姿是否可用,传 false 用于验证降级路径
+ */
 function createHarness(gimbalReady = true) {
   const scene = new THREE.Scene()
   const camera = new THREE.PerspectiveCamera(60, 1.6, 0.1, 1000)
@@ -60,7 +65,9 @@ function createHarness(gimbalReady = true) {
   return { fly, camera, renderedFrom, track, drawImage, setTrack }
 }
 
+// 验证录到的画面恒为云台取景,与用户当前所处的观察者/跟随/机载哪个视角无关
 describe('DroneFly 录像取景', () => {
+  // 未开启录制时 captureRecordingFrame 应完全空转:不渲染、不搬帧、相机位姿不变
   it('未录制时不渲染取景帧、不动相机(零开销)', () => {
     const { fly, camera, renderedFrom, track, drawImage } = createHarness()
 
@@ -72,6 +79,7 @@ describe('DroneFly 录像取景', () => {
     expect(camera.position.toArray()).toEqual(ORBIT_POSITION.toArray())
   })
 
+  // 观察者视角下录制:恰好渲一帧且相机从云台位置出发(而非用户所在的观察者位置),结束后位姿还原
   it('观察者视角下录的是云台取景,且相机位姿原样还回去', () => {
     const { fly, camera, renderedFrom, track, drawImage, setTrack } = createHarness()
     setTrack()
@@ -91,6 +99,7 @@ describe('DroneFly 录像取景', () => {
     expect(camera.position.toArray()).toEqual(ORBIT_POSITION.toArray())
   })
 
+  // 跟随视角与观察者视角同理:录制帧来自云台位置,用户相机位姿不受影响
   it('跟随视角下同样以云台取景,且相机位姿原样还回去', () => {
     const { fly, camera, renderedFrom, track, drawImage, setTrack } = createHarness()
     setTrack()
@@ -106,6 +115,7 @@ describe('DroneFly 录像取景', () => {
     expect(camera.position.toArray()).toEqual(ORBIT_POSITION.toArray())
   })
 
+  // 机载视角下相机本就在云台位:直接搬走当前帧,渲完前后相机位姿都应保持不变
   it('机载视角下相机本就在云台上,直接搬走这一帧,不做多余摆动', () => {
     const { fly, camera, renderedFrom, track, drawImage, setTrack } = createHarness()
     setTrack()
@@ -121,6 +131,7 @@ describe('DroneFly 录像取景', () => {
     expect(camera.position.toArray()).toEqual(before.toArray())
   })
 
+  // 云台位姿获取失败(getGimbalCameraTransform 返回 false)时:不抓帧,且相机位姿不被污染
   it('云台不可用时不抓帧,也不留下半截位姿', () => {
     const { fly, camera, renderedFrom, track, drawImage, setTrack } = createHarness(false)
     setTrack()

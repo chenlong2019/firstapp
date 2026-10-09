@@ -8,6 +8,7 @@ import type { ObstacleBox } from './drone-sim'
  * 不会出现"看着撞上了但没刹停"这类不一致。
  */
 
+/** 一个障碍物(AABB 盒)规格:x/z 为中心平面坐标,width/depth/height 单位为米,color 为 0xRRGGBB */
 export interface ObstacleSpec {
   name: string
   label: string
@@ -23,15 +24,70 @@ export interface ObstacleSpec {
 
 /** 默认障碍物:两组建筑 + 一根正前方灯杆 + 三棵树 + 一道悬空天桥,都在起飞点 30 米内 */
 export const DEFAULT_OBSTACLES: ObstacleSpec[] = [
-  { name: 'BUILDING_A', label: '建筑 A', x: 16, z: -12, width: 9, depth: 9, height: 13, color: 0x2c3a44 },
-  { name: 'BUILDING_B', label: '建筑 B', x: -20, z: 10, width: 11, depth: 15, height: 7, color: 0x2a3740 },
+  {
+    name: 'BUILDING_A',
+    label: '建筑 A',
+    x: 16,
+    z: -12,
+    width: 9,
+    depth: 9,
+    height: 13,
+    color: 0x2c3a44,
+  },
+  {
+    name: 'BUILDING_B',
+    label: '建筑 B',
+    x: -20,
+    z: 10,
+    width: 11,
+    depth: 15,
+    height: 7,
+    color: 0x2a3740,
+  },
   // 正前方细柱(灯杆,直径 0.3 m):验证"正前方中线"盲区是否真的被消除(两条镜头视场在中线重叠)。
   // 放 16m:在 18m 量程内,又不至于挡住起飞点正前方的平飞测试路径
-  { name: 'LAMP_POST', label: '灯杆', x: 0, z: -16, width: 0.3, depth: 0.3, height: 8, color: 0x44535f },
+  {
+    name: 'LAMP_POST',
+    label: '灯杆',
+    x: 0,
+    z: -16,
+    width: 0.3,
+    depth: 0.3,
+    height: 8,
+    color: 0x44535f,
+  },
   // 悬空天桥:桥底离地 7.5 m,横跨起飞点后方(x 向 18 m 宽),用来演示机体上方的视觉测距
-  { name: 'SKY_BRIDGE', label: '天桥', x: 0, z: 10.5, width: 18, depth: 6, height: 2, color: 0x3a4a55, baseY: 7.5 },
-  { name: 'TREE_1', label: '树 1', x: 9, z: 14, width: 3.2, depth: 3.2, height: 6, color: 0x24443a },
-  { name: 'TREE_2', label: '树 2', x: -10, z: -17, width: 2.8, depth: 2.8, height: 4.6, color: 0x21403a },
+  {
+    name: 'SKY_BRIDGE',
+    label: '天桥',
+    x: 0,
+    z: 10.5,
+    width: 18,
+    depth: 6,
+    height: 2,
+    color: 0x3a4a55,
+    baseY: 7.5,
+  },
+  {
+    name: 'TREE_1',
+    label: '树 1',
+    x: 9,
+    z: 14,
+    width: 3.2,
+    depth: 3.2,
+    height: 6,
+    color: 0x24443a,
+  },
+  {
+    name: 'TREE_2',
+    label: '树 2',
+    x: -10,
+    z: -17,
+    width: 2.8,
+    depth: 2.8,
+    height: 4.6,
+    color: 0x21403a,
+  },
   { name: 'TREE_3', label: '树 3', x: 24, z: 7, width: 3, depth: 3, height: 5.4, color: 0x24443a },
 ]
 
@@ -53,6 +109,7 @@ interface MissionMarkerNode {
   pick: THREE.Mesh
 }
 
+/** 航迹缓冲最大点数:按每 0.25 m 取一点,2400 点约覆盖 600 m 航程,防止长航线把缓冲撑爆 */
 const TRAIL_MAX_POINTS = 2400
 /** 航点配色:普通航点青色,当前目标琥珀色(与雷达/返航点区分开) */
 const MISSION_COLOR = 0x39d0b0
@@ -63,6 +120,10 @@ const MISSION_HOVER_COLOR = 0xdffbff
 /** 航点拾取半径(米):光柱本体只有 7 cm,得给一个手好抓的粗管子 */
 const MISSION_PICK_RADIUS = 1.7
 
+/**
+ * 场景辅助的创建与更新(见文件头):地面网格 / 返航点标记 / 障碍物 / 航迹,以及航线任务可视化。
+ * 障碍物同时以 AABB 形式写入 collisionBoxes 供仿真避障使用,可视化与物理共用同一份数据。
+ */
 export class DroneWorld {
   private readonly scene: THREE.Scene
   private readonly group = new THREE.Group()
@@ -85,7 +146,9 @@ export class DroneWorld {
   private readonly missionSelectGroup = new THREE.Group()
   private readonly missionHoverGroup = new THREE.Group()
   /** 每次重建航点时产生的可释放资源(几何 / 贴图 / 材质) */
-  private readonly missionDisposables: Array<THREE.BufferGeometry | THREE.Texture | THREE.Material> = []
+  private readonly missionDisposables: Array<
+    THREE.BufferGeometry | THREE.Texture | THREE.Material
+  > = []
   private readonly missionMarkerNodes: MissionMarkerNode[] = []
   /** 当前航点数据(原位更新时改它,并据此重算航线折线) */
   private readonly missionMarkers: MissionMarker[] = []
@@ -173,6 +236,7 @@ export class DroneWorld {
     this.disposables.push(groundGeometry, groundMaterial)
     const ground = new THREE.Mesh(groundGeometry, groundMaterial)
     ground.rotation.x = -Math.PI / 2
+    // 略微下沉,避免与 y≈0 的细网格、返航点标记同面闪烁(z-fighting)
     ground.position.y = -0.012
     ground.receiveShadow = true
     this.group.add(ground)
@@ -183,6 +247,7 @@ export class DroneWorld {
     this.group.add(fineGrid)
 
     const coarseGrid = new THREE.GridHelper(2000, 20, 0x2f6f72, 0x1f4a4d)
+    // 抬高 4 mm 盖在细网格之上,避免两张网格同面闪烁
     coarseGrid.position.y = 0.004
     this.tintGrid(coarseGrid, 0.75)
     this.group.add(coarseGrid)
@@ -273,7 +338,10 @@ export class DroneWorld {
 
     const activeAltitudeGeometry = new THREE.RingGeometry(1.25, 1.65, 28)
     activeAltitudeGeometry.rotateX(-Math.PI / 2)
-    this.missionActiveAltitudeRing = new THREE.Mesh(activeAltitudeGeometry, this.missionActiveMaterial)
+    this.missionActiveAltitudeRing = new THREE.Mesh(
+      activeAltitudeGeometry,
+      this.missionActiveMaterial,
+    )
     this.missionActiveGroup.add(this.missionActiveAltitudeRing)
 
     // 场景编辑高亮:选中(亮青,双层环)与悬停(淡白,细环)
@@ -284,7 +352,10 @@ export class DroneWorld {
     this.missionSelectGroup.add(selectGroundRing)
     const selectAltitudeGeometry = new THREE.RingGeometry(1.15, 1.35, 28)
     selectAltitudeGeometry.rotateX(-Math.PI / 2)
-    this.missionSelectAltitudeRing = new THREE.Mesh(selectAltitudeGeometry, this.missionSelectMaterial)
+    this.missionSelectAltitudeRing = new THREE.Mesh(
+      selectAltitudeGeometry,
+      this.missionSelectMaterial,
+    )
     this.missionSelectGroup.add(this.missionSelectAltitudeRing)
 
     const hoverGroundGeometry = new THREE.RingGeometry(2.05, 2.2, 36)
@@ -341,7 +412,11 @@ export class DroneWorld {
     if (Number.isNaN(this.lastTrailPoint.x)) {
       this.lastTrailPoint.set(x, y, z)
     }
-    const moved = Math.hypot(x - this.lastTrailPoint.x, y - this.lastTrailPoint.y, z - this.lastTrailPoint.z)
+    const moved = Math.hypot(
+      x - this.lastTrailPoint.x,
+      y - this.lastTrailPoint.y,
+      z - this.lastTrailPoint.z,
+    )
     if (moved < 0.25) return
     if (this.trailCount >= TRAIL_MAX_POINTS) return
     this.trailPositions[this.trailCount * 3] = x
@@ -416,7 +491,7 @@ export class DroneWorld {
       const t2 = Math.abs(vx * u2.x + vy * u2.y + vz * u2.z) - projHalf(u2)
       const e1 = Math.max(0, t1)
       const e2 = Math.max(0, t2)
-      const reference = Math.max(near, 0.05)
+      const reference = Math.max(near, 0.05) // 下限防止靠近锥顶时除以极小值、把阈值放大成误判
       if ((e1 / (reference * tanU1)) ** 2 + (e2 / (reference * tanU2)) ** 2 > 1) continue
 
       // 距离:取盒上距锥顶最近的一点,再沿瞄准轴投影 ——
@@ -538,13 +613,23 @@ export class DroneWorld {
   /** 高亮当前执行目标航点(传 null 取消高亮;waypoint 省略时按索引取当前数据) */
   setMissionActive(index: number, waypoint: MissionMarker | null): void {
     this.missionActiveIndex = index >= 0 ? index : -1
-    this.placeHighlightGroup(this.missionActiveGroup, this.missionActiveAltitudeRing, index, waypoint)
+    this.placeHighlightGroup(
+      this.missionActiveGroup,
+      this.missionActiveAltitudeRing,
+      index,
+      waypoint,
+    )
   }
 
   /** 场景编辑:选中高亮 */
   setMissionSelection(index: number, waypoint: MissionMarker | null = null): void {
     this.missionSelectIndex = index >= 0 ? index : -1
-    this.placeHighlightGroup(this.missionSelectGroup, this.missionSelectAltitudeRing, index, waypoint)
+    this.placeHighlightGroup(
+      this.missionSelectGroup,
+      this.missionSelectAltitudeRing,
+      index,
+      waypoint,
+    )
   }
 
   /** 场景编辑:悬停高亮 */

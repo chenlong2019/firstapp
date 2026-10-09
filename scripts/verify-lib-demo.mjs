@@ -48,6 +48,7 @@ page.on('pageerror', (error) => {
 })
 
 await page.goto(URL, { waitUntil: 'domcontentloaded' })
+// 无头低帧率产物首帧渲染慢,首屏选择器给 60s 兜底
 await page.waitForSelector('[data-testid="tab-sim"]', { timeout: 60000 })
 
 // ——————————————————————— 1. 页面结构 ———————————————————————
@@ -152,6 +153,7 @@ await page.screenshot({ path: path.join(SHOT_DIR, 'libdemo-02-world.png') })
 // ——————————————————————— 4. 演示 03 · 完整装配 ———————————————————————
 await page.click('[data-testid="tab-sandbox"]')
 await page.waitForSelector('[data-testid="sandbox-canvas"] canvas', { timeout: 60000 })
+// GameInstance 装配(建场景/加载环境)耗时以十秒计,故上限放到 120s
 await page.waitForFunction(
   () => !document.querySelector('[data-testid="sandbox-overlay"]'),
   undefined,

@@ -26,7 +26,8 @@ const measure = () =>
     model.updateMatrixWorld(true)
     const get = (name) => model.getObjectByName(name)
     const boxC = (obj) => new THREE.Box3().setFromObject(obj).getCenter(new THREE.Vector3())
-    const pivot = get('CTRL_Gimbal_Yaw').getWorldPosition(new THREE.Vector3())
+    // 以偏航枢轴为原点量壳心:pivotToShell 反映偏移方向,dist 反映离轴距离(应基本恒定)
+  const pivot = get('CTRL_Gimbal_Yaw').getWorldPosition(new THREE.Vector3())
     const shell = boxC(get('GIMBAL_BlackCameraShell'))
     const housing = boxC(get('BODY_Fixed_GimbalHousing_Center'))
     const axis = new THREE.Vector3(0, 0, -1).transformDirection(get('GIMBAL_BlackCameraPod').matrixWorld)
@@ -42,6 +43,7 @@ const measure = () =>
     }
   })
 
+// 直接写 sim 的云台指令字段(与 UI 同一入口)来扫行程,省得逐帧等 UI 响应
 const setCmd = (pitch, roll = 0, yaw = 0) =>
   page.evaluate(([p, r, y]) => {
     window.__djiDebug.fly.sim.gimbalPitch = p

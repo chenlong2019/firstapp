@@ -51,6 +51,12 @@ release-*/
 .verify-shots/
 .verify-dji.log
 
+# 多格式模型验证夹具(scripts/make-model-fixtures.mjs 生成)
+.verify-fixtures/
+
+# 端到端验证用的临时构建产物(verify-race-page 跑 vite preview 用)
+dist-race-check/
+
 # 大体积本地演示数据,代码未引用
 roads_demo_beijing.gpkg
 

@@ -3,7 +3,9 @@
 
   // Override to include only test files and clear exclusions.
   // Application code imported in tests is automatically included via module resolution.
-  "include": ["src/**/__tests__/*", "env.d.ts"],
+  // src/types 也要显式包含:cesium.d.ts 是全局 namespace 声明(非模块),
+  // 测试链路拉进 road-mvt-scene / cesium-utils 时没有它就会报 20 个 "Cannot find name 'Cesium'"。
+  "include": ["src/**/__tests__/*", "src/types/*", "env.d.ts"],
   "exclude": [],
 
   "compilerOptions": {

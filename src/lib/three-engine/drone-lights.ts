@@ -18,6 +18,7 @@ import * as THREE from 'three'
  * 灯组 rig 挂在模型节点下,随模型一起移动旋转;模型自带的 LIGHT_* 点光源也由本模块驱动。
  */
 
+/** 尾部状态灯语的键;每键对应 STATUS_PATTERNS 里的一套闪灯时序,由 statusPatternFor 按飞行状态映射 */
 export type StatusLightKey =
   | 'selfCheck'
   | 'sensorWarmup'
@@ -33,7 +34,9 @@ export type StatusLightKey =
   | 'motorRunning'
   | 'off'
 
+/** 电池电量灯模式:level=按电量分级点亮,其余为充电/满电/故障/关闭 */
 export type BatteryLightMode = 'level' | 'charging' | 'full' | 'fault' | 'off'
+/** 底部辅助灯模式:auto=夜间低空自动,on=强制开,off=关 */
 export type AuxLightMode = 'auto' | 'on' | 'off'
 
 /** 灯语的一个时间片段:colors 依次对应 [左灯, 右灯](只给一个颜色时左右同色) */
@@ -43,6 +46,7 @@ export interface LightStep {
   offMs: number
 }
 
+/** 一种灯语的元数据 + 时序(供面板展示,并由 applyStatusPattern 按时间轴驱动) */
 export interface StatusPatternMeta {
   key: StatusLightKey
   label: string
@@ -164,6 +168,7 @@ export function describeBatteryLevel(levelPercent: number): string {
   return blinkIndex === null ? `${lit} 灯常亮` : `${lit} 常亮 + 1 闪烁`
 }
 
+/** 单颗电量灯的对外快照(给面板做 CSS 动画镜像) */
 export interface BatteryLedSnapshot {
   /** 当前帧是否点亮 */
   on: boolean
@@ -171,6 +176,7 @@ export interface BatteryLedSnapshot {
   blinking: boolean
 }
 
+/** 灯光系统的整体快照(面板 100ms 轮询取用) */
 export interface DroneLightsSnapshot {
   statusKey: StatusLightKey
   statusLabel: string
@@ -220,6 +226,12 @@ const LED_LIGHT_INTENSITY = 0.35 // 灯珠点光源强度(轻微溢光,保持灯
 const LED_LIGHT_DISTANCE = 1.6
 const AUX_MODEL_LIGHT_INTENSITY = 1.6 // 模型自带 LIGHT_BottomAssist 的峰值强度
 
+/**
+ * 灯光系统(见文件头):尾部状态灯 / 电池电量灯 / 底部辅助灯,以及模型自带的 LIGHT_* 点光源。
+ *
+ * ⚠️ 唯一驱动入口是每帧的 update(delta)(由 drone-fly 的 syncPose 调用);
+ * setStatusPattern / setBatteryMode 等只登记"意图",真正的灯效在 update 内按时间轴应用。
+ */
 export class DroneLights {
   private rig = new THREE.Group()
   private model: THREE.Group | null = null
@@ -281,12 +293,19 @@ export class DroneLights {
     // —— 模型自带灯位对象解析(优先使用,避免手写坐标导致悬空) ——
     model.updateMatrixWorld(true)
     const raycaster = new THREE.Raycaster()
-    const raycastLocal = (localX: number, localY: number, fromLocalZ: number, dir: THREE.Vector3): THREE.Vector3 => {
+    const raycastLocal = (
+      localX: number,
+      localY: number,
+      fromLocalZ: number,
+      dir: THREE.Vector3,
+    ): THREE.Vector3 => {
       const origin = model.localToWorld(new THREE.Vector3(localX, localY, fromLocalZ))
       raycaster.set(origin, dir.clone().normalize())
       const hits = raycaster.intersectObject(model, true)
       const hit = hits[0]
-      return hit ? model.worldToLocal(hit.point.clone()) : new THREE.Vector3(localX, localY, fromLocalZ)
+      return hit
+        ? model.worldToLocal(hit.point.clone())
+        : new THREE.Vector3(localX, localY, fromLocalZ)
     }
     /** 取命名节点在模型自身坐标系中的中心(网格按几何包围盒中心,灯光按世界位置) */
     const nodeCenterLocal = (name: string): THREE.Vector3 | null => {
@@ -318,8 +337,16 @@ export class DroneLights {
     // 直接复用模型自带灯珠网格 LED_Status_Tail_Left / Right:保留原几何与朝向,
     // 仅给该网格单独赋自发光材质(全机材质共享,不能改共享材质本身)
     for (const spec of [
-      { meshName: 'LED_Status_Tail_Right', lightName: 'LIGHT_StatusLED_Right', fallback: new THREE.Vector3(8.6, 0.95, 9.71) },
-      { meshName: 'LED_Status_Tail_Left', lightName: 'LIGHT_StatusLED_Left', fallback: new THREE.Vector3(-8.6, 0.95, 9.71) },
+      {
+        meshName: 'LED_Status_Tail_Right',
+        lightName: 'LIGHT_StatusLED_Right',
+        fallback: new THREE.Vector3(8.6, 0.95, 9.71),
+      },
+      {
+        meshName: 'LED_Status_Tail_Left',
+        lightName: 'LIGHT_StatusLED_Left',
+        fallback: new THREE.Vector3(-8.6, 0.95, 9.71),
+      },
     ]) {
       const sourceMesh = model.getObjectByName(spec.meshName) ?? null
       const anchor = nodeCenterLocal(spec.meshName) ?? spec.fallback
@@ -397,11 +424,15 @@ export class DroneLights {
     this.batteryLedsUi = this.batteryLeds.map(() => ({ on: false, blinking: false }))
 
     // —— 3. 底部辅助照明灯:机身正下方,紧贴下视视觉传感器(SENSOR_Glass_Downward) ——
-    const downSensor = nodeCenterLocal('SENSOR_Glass_Downward') ?? new THREE.Vector3(0, -2.45, -0.93)
+    const downSensor =
+      nodeCenterLocal('SENSOR_Glass_Downward') ?? new THREE.Vector3(0, -2.45, -0.93)
     const auxZ = downSensor.z + 1.15 // 下视传感器旁(向机尾侧偏移,避免与玻璃重叠)
     const auxAnchor = raycastLocal(0, box.min.y - size.y, auxZ, new THREE.Vector3(0, 1, 0)) // 从机腹下方往上吸附
     const auxY = auxAnchor.y - 0.06
-    this.auxModelLight = takeModelLight('LIGHT_BottomAssist', new THREE.Vector3(0, auxY - 0.25, auxZ))
+    this.auxModelLight = takeModelLight(
+      'LIGHT_BottomAssist',
+      new THREE.Vector3(0, auxY - 0.25, auxZ),
+    )
     const discGeometry = new THREE.CircleGeometry(1.15, 20)
     discGeometry.rotateX(Math.PI / 2) // 面朝下
     this.disposables.push(discGeometry)
@@ -450,6 +481,7 @@ export class DroneLights {
 
   /** 每帧驱动:deltaSeconds */
   update(deltaSeconds: number): void {
+    // 单帧时长截断到 0.1s:标签页挂起后恢复时 delta 会很大,不截断会让灯语时间轴大跳、淡入错乱
     const delta = Math.max(0, Math.min(deltaSeconds, 0.1))
     this.timeMs += delta * 1000
     this.applyStatusPattern()
@@ -457,18 +489,22 @@ export class DroneLights {
     this.applyAux(delta)
   }
 
+  /** 设置状态灯语(仅登记意图,下一帧 update 生效);未知键忽略 */
   setStatusPattern(key: StatusLightKey): void {
     if (key in STATUS_PATTERNS) this.statusKey = key
   }
 
+  /** 设置电池灯模式(仅登记意图,下一帧 update 生效) */
   setBatteryMode(mode: BatteryLightMode): void {
     this.batteryMode = mode
   }
 
+  /** 设置电量百分比(0~100,越界自动夹紧);到灯珠的映射见 batteryLedPlan */
   setBatteryLevel(levelPercent: number): void {
     this.batteryLevel = Math.max(0, Math.min(100, levelPercent))
   }
 
+  /** 设置底部辅助灯模式(仅登记意图;实际点亮还受"已起飞"门控,见 applyAux) */
   setAuxLightMode(mode: AuxLightMode): void {
     this.auxMode = mode
   }
@@ -556,6 +592,7 @@ export class DroneLights {
     }
   }
 
+  /** 灯光系统快照(面板轮询用) */
   getSnapshot(): DroneLightsSnapshot {
     const pattern = STATUS_PATTERNS[this.statusKey]
     return {
@@ -571,6 +608,7 @@ export class DroneLights {
     }
   }
 
+  /** 拆除灯组:灯珠/点光源放回出厂父节点、还原共享材质、释放自建资源(漏掉会让热更新重建时找不到灯珠) */
   destroy(): void {
     this.rig.parent?.remove(this.rig)
     if (this.auxBeam) this.scene?.remove(this.auxBeam)
@@ -699,7 +737,8 @@ export class DroneLights {
       const plan = batteryLedPlan(this.batteryLevel)
       states = this.batteryLeds.map((_, i) => {
         if (i < plan.lit) return true
-        if (plan.blinkIndex !== null && i === plan.blinkIndex) return blinkPhase(this.timeMs, 240, 240)
+        if (plan.blinkIndex !== null && i === plan.blinkIndex)
+          return blinkPhase(this.timeMs, 240, 240)
         return false
       })
       blinkFlags = this.batteryLeds.map((_, i) => plan.blinkIndex !== null && i === plan.blinkIndex)
@@ -716,7 +755,8 @@ export class DroneLights {
 
   /** 手册第 3 节:底部辅助照明灯(地面锁定 + 起飞后才能点亮) */
   private applyAux(delta: number): void {
-    if (!this.auxSpot || !this.auxDisc || !this.auxBeam || !this.auxDiscMaterial || !this.auxGlow) return
+    if (!this.auxSpot || !this.auxDisc || !this.auxBeam || !this.auxDiscMaterial || !this.auxGlow)
+      return
 
     let want = false
     if (this.flying) {

@@ -1,6 +1,8 @@
 <template>
   <div class="stick-dial">
+    <!-- 顶部名称 -->
     <div class="stick-name">{{ label }}</div>
+    <!-- 可拖拽的摇杆盘:指针在盘内拖动生成归一化杆量(圆形行程) -->
     <div
       ref="rootRef"
       class="stick-pad"
@@ -17,14 +19,19 @@
       <span class="stick-ring"></span>
       <span class="stick-cross-h"></span>
       <span class="stick-cross-v"></span>
-      <span class="stick-knob" :style="{ '--kx': `${props.x * TRAVEL}px`, '--ky': `${-props.y * TRAVEL}px` }">
+      <span
+        class="stick-knob"
+        :style="{ '--kx': `${props.x * TRAVEL}px`, '--ky': `${-props.y * TRAVEL}px` }"
+      >
         <i></i>
       </span>
     </div>
+    <!-- 横 / 纵轴名(右为正 / 上为正) -->
     <div class="stick-axis">
       <span>{{ axisH }}</span>
       <span>{{ axisV }}</span>
     </div>
+    <!-- 实时合成杆量数值,有输入时高亮 -->
     <div class="stick-value" :class="{ live: Math.hypot(props.x, props.y) > 0.04 }">
       {{ props.x.toFixed(2) }} / {{ props.y.toFixed(2) }}
     </div>
@@ -32,6 +39,11 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * 虚拟摇杆旋钮子组件(单只)。
+ * 负责显示一路摇杆的杆量并接受指针拖拽:父组件传入 label / 两个轴名 / x / y,
+ * 拖动时向外派发 'move'(x 右为正、y 上为正,-1~1 归一化);松手自回中并再派发一次归零。
+ */
 import { ref } from 'vue'
 
 /** 摇杆盘半径(px) − 旋钮半径(px),即旋钮圆心能移动的最大距离 */
@@ -48,13 +60,16 @@ const props = defineProps<{
   disabled?: boolean
 }>()
 
+/** 向外报告杆量变化(自回中时也会派发 { x: 0, y: 0 }) */
 const emit = defineEmits<{
   (event: 'move', payload: { x: number; y: number }): void
 }>()
 
+// 摇杆盘 DOM 引用(用于把指针坐标换算成杆量)与当前是否处于拖拽中
 const rootRef = ref<HTMLElement | null>(null)
 const active = ref(false)
 
+/** 把任意数值夹到摇杆行程范围 [-1, 1] */
 const clamp = (value: number): number => Math.min(1, Math.max(-1, value))
 
 /**
@@ -78,6 +93,7 @@ function applyPointer(event: PointerEvent): void {
   emit('move', { x: clamp(dx), y: clamp(dy) })
 }
 
+/** 按下:禁用时忽略;否则捕获指针并立刻按当前落点更新杆量 */
 function onPointerDown(event: PointerEvent): void {
   if (props.disabled) return
   active.value = true
@@ -85,6 +101,7 @@ function onPointerDown(event: PointerEvent): void {
   applyPointer(event)
 }
 
+/** 移动:仅在拖拽中才更新杆量(pointer capture 保证移出盘面仍能收到 move) */
 function onPointerMove(event: PointerEvent): void {
   if (!active.value) return
   applyPointer(event)
@@ -99,6 +116,7 @@ function onPointerUp(): void {
 </script>
 
 <style scoped lang="scss">
+/* 旋钮整体:竖向排布 名称 / 摇杆盘 / 轴名 / 数值 */
 .stick-dial {
   display: flex;
   flex-direction: column;
@@ -115,6 +133,7 @@ function onPointerUp(): void {
     monospace;
   letter-spacing: 0.08em;
 }
+/* 摇杆盘:圆形容程底盘;touch-action:none 防止拖动时触发页面滚动 */
 .stick-pad {
   position: relative;
   width: 152px;
@@ -160,6 +179,7 @@ function onPointerUp(): void {
   left: 50%;
   width: 1px;
 }
+/* 旋钮本体:由 --kx/--ky 变量驱动位移(只位移,不引起重排) */
 .stick-knob {
   position: absolute;
   top: 50%;
@@ -186,6 +206,7 @@ function onPointerUp(): void {
   background: rgb(121 230 202 / 22%);
   border-radius: 50%;
 }
+/* 底部两行:轴名与合成数值(无输入时暗色,有输入时提亮) */
 .stick-axis {
   display: flex;
   justify-content: space-between;

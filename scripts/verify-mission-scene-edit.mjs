@@ -23,6 +23,7 @@ import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
+// 清掉大小写两种写法的代理环境变量,确保无头浏览器直连本机 127.0.0.1 服务
 delete process.env.HTTP_PROXY
 delete process.env.HTTPS_PROXY
 delete process.env.http_proxy

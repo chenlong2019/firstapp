@@ -15,6 +15,7 @@ const page = await browser.newPage({ viewport: { width: 1200, height: 800 } })
 page.on('pageerror', (e) => console.log('[pageerror]', e.message))
 await page.goto(URL, { waitUntil: 'domcontentloaded' })
 await page.waitForFunction('window.__djiDebug?.fly?.rig', undefined, { timeout: 120000 })
+// 展开态才量:收纳时机臂收起,分组包围盒与电机位置都会变
 await page.waitForFunction('window.__djiDebug.fly.rig.armFold > 0.999', undefined, { timeout: 30000 })
 await page.waitForTimeout(800)
 
@@ -36,6 +37,7 @@ const out = await page.evaluate(() => {
     return [Number(v.x.toFixed(3)), Number(v.y.toFixed(3)), Number(v.z.toFixed(3))]
   }
   // 全机网格包围盒(按名字前缀分组)
+  // 按网格名前缀分组做包围盒:用于判定机头在 +z 还是 -z、云台装在哪一端
   const groups = { BODY: null, GEAR: null, ARM: null, PROP: null, GIMBAL: null, SENSOR: null }
   const boxes = {}
   for (const key of Object.keys(groups)) boxes[key] = new THREE.Box3()

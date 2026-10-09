@@ -28,6 +28,7 @@ await page.click('[data-testid="tab-mission"]')
 await page.waitForTimeout(400)
 await page.screenshot({ path: join(SHOT_DIR, 'scene-edit-01-panel.png') })
 
+// 打开场景内编辑后才会生成可点选的航点标记
 await page.click('[data-testid="scene-edit-toggle"]')
 await page.waitForTimeout(900)
 await page.click('[data-testid="scene-edit-select-first"]')
@@ -35,6 +36,7 @@ await page.waitForTimeout(600)
 await page.screenshot({ path: join(SHOT_DIR, 'scene-edit-02-selected.png') })
 
 // 拖到半路:顺便看看拖动中的高亮
+// 把航点世界坐标投影到屏幕像素:先按高度抬高标记点,再 NDC→像素(供鼠标拖拽定位)
 const target = await page.evaluate(() => {
   const { fly, THREE, game } = window.__djiDebug
   const node = fly.world.missionMarkerNodes[0]

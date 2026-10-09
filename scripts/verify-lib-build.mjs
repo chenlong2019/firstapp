@@ -54,7 +54,15 @@ check('分发 package.json 存在', exists(pkgPath))
 
 const declDir = path.join(dist, 'three-engine')
 const declFiles = exists(declDir) ? fs.readdirSync(declDir).filter((f) => f.endsWith('.d.ts')) : []
-check('12 个模块声明齐全', declFiles.length === 12, `${declFiles.length} 个`)
+// 模块数不写死:以 src/lib/three-engine 的 .ts 文件数为基准,新增/删除模块不用回来改这里
+const srcModuleCount = fs
+  .readdirSync(path.join(root, 'src/lib/three-engine'))
+  .filter((f) => f.endsWith('.ts')).length
+check(
+  '模块声明齐全(与源码模块数一致)',
+  declFiles.length === srcModuleCount,
+  `${declFiles.length}/${srcModuleCount} 个`,
+)
 
 let pkg = {}
 if (exists(pkgPath)) pkg = JSON.parse(read(pkgPath))
@@ -83,6 +91,7 @@ check(
   threeSpecifiers.join(' , '),
 )
 const esmKb = exists(esmPath) ? fs.statSync(esmPath).size / 1024 : 0
+// 体积区间:下限 50KB 防产物被清空,上限 400KB 防 three 被误内联进来
 check('ESM 体积远小于 three 本体（未内联）', esmKb > 50 && esmKb < 400, `${esmKb.toFixed(1)} KB`)
 check('ESM 产物不含 three 实现（无 REVISION 常量）', !/REVISION\s*=\s*['"`]186/.test(esmSrc))
 
@@ -116,6 +125,7 @@ const umd = await page.evaluate(() => {
   ]
   const areClasses = expected.filter((n) => typeof T[n] === 'function')
   const sim = new T.DroneSim()
+  // 空转 2 秒(120 步 × 1/60s),验证纯逻辑层脱离 DOM 也能稳定推进
   for (let i = 0; i < 120; i += 1) sim.step(1 / 60)
   const snap = sim.snapshot()
   return {

@@ -62,6 +62,7 @@ await page.evaluate(() => {
 // 上电 → 启动航线
 await page.click('[data-testid="btn-power"]')
 await page.waitForFunction("window.__djiDebug.fly.sim.phase === 'standby'", undefined, { timeout: 60000 })
+// 固定为实时倍速:倍速会拉长 sim.step 的 delta,逐帧位移统计会失真
 await page.evaluate(() => window.__djiDebug.fly.sim.setTimeScale?.(1))
 await page.evaluate(() => window.__djiDebug.fly.startMission())
 
@@ -75,6 +76,7 @@ const result = await page.evaluate(() => {
   const { log, frames } = window.__departDebug
   const sim = window.__djiDebug.fly.sim
   const byStage = {}
+  // 按阶段归并逐帧位移:纯垂直段应只有 dy、纯水平段应只有 dx
   for (const frame of frames) {
     const entry = byStage[frame.stage] ?? { steps: 0, maxHorizontal: 0, maxVertical: 0 }
     entry.steps += 1

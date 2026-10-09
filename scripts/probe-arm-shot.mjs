@@ -1,4 +1,9 @@
 /** 折叠/展开特写截图:近距离目视确认机臂姿态 */
+/**
+ * 用法:先起 dev server,再 `node scripts/probe-arm-shot.mjs`;产物 .verify-shots/armfix-*.png。
+ * 两张:armfix-folded(收纳)、armfix-open(展开),用 zoom 按球坐标摆近景机位。
+ * 坑:展开那张要等 armFold→0 且 bladeOpen→1 再拍,否则桨叶还处于收拢中间态。
+ */
 import { chromium } from 'playwright'
 
 delete process.env.HTTP_PROXY
@@ -34,6 +39,7 @@ const zoom = (radius, phiDeg, thetaDeg) =>
     cam.lookAt(target)
   }, [radius, phiDeg, thetaDeg])
 
+// 收纳态特写:半径 1.6、俯仰 55°、方位 20° 摆近景机位
 await zoom(1.6, 55, 20)
 await page.waitForTimeout(2500)
 await page.screenshot({ path: '.verify-shots/armfix-folded.png' })
@@ -41,6 +47,7 @@ console.log('saved armfix-folded.png')
 
 await page.locator('[data-testid="btn-arm"]').click()
 await page.waitForFunction('window.__djiDebug.fly.rig.armFold < 0.001', undefined, { timeout: 30000 })
+// 展开后还要等桨叶张开(bladeOpen→1)再拍,否则特写里桨叶仍是收拢中间态
 await page.waitForFunction('window.__djiDebug.fly.rig.bladeOpen > 0.98', undefined, { timeout: 30000 })
 await page.waitForTimeout(1500)
 await zoom(1.9, 55, 20)

@@ -101,6 +101,7 @@ for (const pos of ['FrontLeft', 'FrontRight', 'RearLeft', 'RearRight']) {
   const b = worldOf(boneI)
   const dx = p.t.x - h.t.x
   const dz = p.t.z - h.t.z
+  // 方位角在机体 XZ 平面内量(前为 -Z),0° 指向 +X;单位度
   const az = Math.atan2(dz, dx)
   // 收纳方向:前臂 +Z(机尾),后臂 -Z(机头)
   const targetAz = pos.startsWith('Front') ? Math.atan2(1, 0) : Math.atan2(-1, 0)
@@ -118,6 +119,7 @@ for (const pos of ['FrontLeft', 'FrontRight', 'RearLeft', 'RearRight']) {
   const propI = byName.get(`CTRL_Prop_${pos}_Spin`)
   if (propI === undefined) continue
   const p = worldOf(propI)
+  // 电机轴 = CTRL_Prop 局部 +Y 经世界四元数旋转;出厂姿态下应接近竖直
   const axis = qRotVec(p.q, { x: 0, y: 1, z: 0 })
   console.log(`${pos}: 电机轴世界方向=(${axis.x.toFixed(3)},${axis.y.toFixed(3)},${axis.z.toFixed(3)})  位置=(${p.t.x.toFixed(2)},${p.t.y.toFixed(2)},${p.t.z.toFixed(2)}) 缩放=${p.s}`)
 }

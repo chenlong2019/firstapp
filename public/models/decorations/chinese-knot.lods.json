@@ -1,0 +1,26 @@
+[
+  {
+    "file": "chinese-knot.glb",
+    "triangles": 61388,
+    "bodyTriangles": 35948,
+    "fibresPerBundle": 36,
+    "error": 0.00039554841350764036,
+    "bytes": 3465172
+  },
+  {
+    "file": "chinese-knot-medium.glb",
+    "triangles": 7603,
+    "bodyTriangles": 2595,
+    "fibresPerBundle": 12,
+    "error": 0.004576771520078182,
+    "bytes": 511404
+  },
+  {
+    "file": "chinese-knot-far.glb",
+    "triangles": 2267,
+    "bodyTriangles": 843,
+    "fibresPerBundle": 5,
+    "error": 0.009709985926747322,
+    "bytes": 186440
+  }
+]

@@ -9,6 +9,7 @@ const buf = readFileSync(path)
 const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
 let off = 12
 let json = null
+// 遍历 GLB chunk:每块 4B 长度 + 4B 类型,JSON=0x4E4F534A、BIN=0x004E4942,读到 JSON 即停
 while (off < buf.byteLength) {
   const len = dv.getUint32(off, true)
   const type = dv.getUint32(off + 4, true)
@@ -33,6 +34,7 @@ const chain = (i) => {
   return list.reverse()
 }
 
+// 只打印机臂/桨/骨骼/云台/起落架相关节点,滤掉环境网格的噪声
 const interesting = (name) =>
   /CTRL_Arm|CTRL_Prop|ARM_|RIG_|CTRL_DJI_Root|CTRL_Gimbal|GEAR_|ROTOR_|MOTOR_|PROP_.*Blade|SRC_GeometryRoot|ARMATURE|Armature|Bone/i.test(name)
 

@@ -1,5 +1,8 @@
 // 模型树显隐复选框端到端验证:node scripts/verify-tree-checkbox.mjs
 // 需先起 dev server(默认 http://localhost:15185)
+// 覆盖:单件隐藏/显示 · 隐藏父级连坐整棵子树 · 子级部分隐藏→父行半选 ·
+//       勾选被连坐子件恢复祖先链 · 隐藏选中件后收起检查器 · 隐藏件仍随导出。
+// 截图固定写到硬编码的 SHOT_DIR,不跟其它脚本一样用 process.cwd()。
 import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -228,10 +231,12 @@ for (let i = exportLeafIndex - 1; i >= 0; i -= 1) {
 }
 await page.locator('.tree-row').nth(exportParentIndex).click()
 await page.waitForTimeout(250)
+// 先挂下载监听再点按钮:下载事件可能在 click 返回前就触发,后挂会漏掉
 const downloadPromise = page.waitForEvent('download', { timeout: 30000 })
 await page.getByRole('button', { name: '⬇ 导出选中部件' }).click()
 const download = await downloadPromise
 const glbBytes = await readFile(await download.path())
+// GLB 里节点名以 UTF-8 明文存于 JSON chunk,直接搜索字节即可判断该件是否被打包
 const included = glbBytes.includes(Buffer.from(exportLeafName, 'utf8'))
 check('导出的 GLB 仍包含被隐藏的子件', included, `${exportLeafName} · ${glbBytes.length} bytes`)
 await clickBox(exportLeafIndex)

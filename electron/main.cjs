@@ -71,6 +71,7 @@ function createStaticServer() {
   return http.createServer((request, response) => {
     let pathname
     try {
+      // 用哑基址把相对 URL 补成绝对再取 pathname,顺带 decodeURIComponent 解 %xx
       pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://127.0.0.1').pathname)
     } catch {
       response.writeHead(400).end('bad request')
@@ -97,6 +98,7 @@ function createStaticServer() {
     }
 
     const stat = fs.statSync(filePath)
+    // no-cache:本地服务不做缓存,避免重新打包 dist 后仍读到旧文件
     response.writeHead(200, {
       'Content-Type': MIME_TYPES[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream',
       'Content-Length': stat.size,

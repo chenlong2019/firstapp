@@ -37,6 +37,7 @@ const measure = (label) =>
     const THREE = d.THREE
     d.fly.rig.model.updateMatrixWorld(true)
     const pod = d.fly.rig.model.getObjectByName('GIMBAL_BlackCameraPod')
+    // 相机与云台光轴都取各自局部 -Z(Three.js 相机前向)在世界系的指向,对比是否一致
     const camDir = new THREE.Vector3(0, 0, -1).applyQuaternion(d.game.camera.quaternion).toArray().map((n) => Number(n.toFixed(4)))
     const podDir = new THREE.Vector3(0, 0, -1).transformDirection(pod.matrixWorld).toArray().map((n) => Number(n.toFixed(4)))
     return {
@@ -57,6 +58,7 @@ await measure('fpv heading=0')
 for (const h of [90, 180]) {
   await page.evaluate((deg) => {
     const sim = window.__djiDebug.fly.sim
+    // 直接改 sim.heading 扫 0/90/180,验证光轴随航向跟随(不必等 UI 转向动画)
     sim.heading = deg
   }, h)
   await page.waitForTimeout(600)

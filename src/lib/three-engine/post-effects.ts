@@ -1,3 +1,10 @@
+/**
+ * 基于 three 0.186 TSL 的后处理管线:两层描边(选中 / 悬停)+ Bloom。
+ *
+ * 处于渲染层,被 glb-viewer 复用;底层 RenderPipeline 挂在 WebGPURenderer 上
+ * (WebGL2 回退后端同样可用),渲染循环里以 pipeline.render() 取代 renderer.render()。
+ * 对外导出 OutlineLayer / PostEffects 两个类、三组默认设置与对应设置类型。
+ */
 import * as THREE from 'three'
 import { RenderPipeline, type WebGPURenderer } from 'three/webgpu'
 import { pass, uniform } from 'three/tsl'
@@ -31,6 +38,7 @@ export interface OutlineSettings {
 /** 悬停描边设置:字段与选中描边一致,只是默认更细、更淡。 */
 export type HoverOutlineSettings = OutlineSettings
 
+/** 默认泛光:轻强度、阈值 0.85,仅高光区域溢出光晕。 */
 export const DEFAULT_BLOOM_SETTINGS: BloomSettings = {
   enabled: true,
   strength: 0.7,
@@ -38,6 +46,7 @@ export const DEFAULT_BLOOM_SETTINGS: BloomSettings = {
   threshold: 0.85,
 }
 
+/** 默认选中描边:青色、较粗,作为"已锁定"的视觉层。 */
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
   enabled: true,
   thickness: 3.5,
@@ -83,6 +92,7 @@ export class OutlineLayer {
       edgeGlow: this.glowUniform,
     })
 
+    // 改写 OutlineNode 私有字段:three 升级若改字段名会静默失效(边色退回内部硬编码的红/绿)
     const mutable = this.node as unknown as {
       _visibleEdgeColor: unknown
       _hiddenEdgeColor: unknown

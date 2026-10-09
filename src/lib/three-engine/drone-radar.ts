@@ -96,6 +96,7 @@ const LENS_SPLAY_DEG = 20
 const HALF_SIDE_DEG = 22.5
 const HALF_UP_DEG = 36
 
+/** 未上电 / 未检测时的空读数(update 复位时会保留用户选择的 aim) */
 const EMPTY_SNAPSHOT: RadarSnapshot = {
   detecting: false,
   left: null,
@@ -132,6 +133,7 @@ function geometryNormal(mesh: THREE.Mesh): THREE.Vector3 {
     cross.crossVectors(edgeB, edgeA)
     sum.add(cross)
   }
+  // 面积加权和接近零(退化或对消几何)时退回 +Y,避免得到零向量
   return sum.lengthSq() > 1e-12 ? sum.normalize() : V(0, 1, 0)
 }
 
@@ -175,7 +177,9 @@ interface BeamUnit {
 const splay = Math.sin(LENS_SPLAY_DEG * DEG)
 const splayCos = Math.cos(LENS_SPLAY_DEG * DEG)
 
-const SENSOR_SPECS: Array<Omit<SensorUnit, 'mesh' | 'localCenter' | 'normalGeo' | 'sign' | 'aimWorld' | 'aimReady'>> = [
+const SENSOR_SPECS: Array<
+  Omit<SensorUnit, 'mesh' | 'localCenter' | 'normalGeo' | 'sign' | 'aimWorld' | 'aimReady'>
+> = [
   {
     group: 'front',
     position: 'left',
@@ -234,6 +238,10 @@ const SENSOR_SPECS: Array<Omit<SensorUnit, 'mesh' | 'localCenter' | 'normalGeo' 
   },
 ]
 
+/**
+ * 测距雷达(见文件头):四台视觉传感器(前视双摄 + 上视双孔),每帧做锥形视场检测并更新可视化。
+ * 只做"传感器测量 + 可视化";刹停保护由 drone-sim 的 AABB 避障负责,两层互不干扰。
+ */
 export class DroneRadar {
   private readonly group = new THREE.Group()
   private readonly disposables: Array<THREE.BufferGeometry | THREE.Material> = []
@@ -298,10 +306,12 @@ export class DroneRadar {
     scene.add(this.group)
   }
 
+  /** 前视量程(米),按官方 0.5~18 m */
   get range(): number {
     return FRONT_RANGE
   }
 
+  /** 上视量程(米),按官方 0.5~15 m */
   get upRange(): number {
     return UP_RANGE
   }
@@ -320,6 +330,7 @@ export class DroneRadar {
     this.snapshot = { ...this.snapshot, aim }
   }
 
+  /** 当前瞄准模式(forward / sensor) */
   getAim(): RadarAim {
     return this.aim
   }
@@ -357,7 +368,13 @@ export class DroneRadar {
   }
 
   /** 每个传感器的绑定情况(探针用) */
-  debugInfo(): Array<{ group: string; position: string; nodeName: string; bound: boolean; aimDeg: number[] }> {
+  debugInfo(): Array<{
+    group: string
+    position: string
+    nodeName: string
+    bound: boolean
+    aimDeg: number[]
+  }> {
     return this.sensors.map((sensor) => ({
       group: sensor.group,
       position: sensor.position,
@@ -399,7 +416,11 @@ export class DroneRadar {
 
       // —— 镜头转向:目标方向 ——
       if (this.aim === 'sensor' && sensor.mesh) {
-        this.targetAxis.copy(sensor.normalGeo).transformDirection(sensor.mesh.matrixWorld).normalize().multiplyScalar(sensor.sign)
+        this.targetAxis
+          .copy(sensor.normalGeo)
+          .transformDirection(sensor.mesh.matrixWorld)
+          .normalize()
+          .multiplyScalar(sensor.sign)
       } else {
         this.targetAxis.copy(sensor.aimDir).applyMatrix4(this.rotation).normalize()
       }
@@ -407,7 +428,9 @@ export class DroneRadar {
         sensor.aimWorld.copy(this.targetAxis)
         sensor.aimReady = true
       } else {
-        sensor.aimWorld.lerp(this.targetAxis, Math.min(1, Math.max(0, delta) * AIM_TURN_RATE)).normalize()
+        sensor.aimWorld
+          .lerp(this.targetAxis, Math.min(1, Math.max(0, delta) * AIM_TURN_RATE))
+          .normalize()
       }
       this.axis.copy(sensor.aimWorld)
 
@@ -513,6 +536,7 @@ export class DroneRadar {
     return this.beamsVisible
   }
 
+  /** 释放几何/材质并复位读数 */
   destroy(): void {
     this.group.parent?.remove(this.group)
     for (const disposable of this.disposables) disposable.dispose()

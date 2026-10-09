@@ -17,6 +17,7 @@ const page = await browser.newPage({ viewport: { width: 900, height: 700 } })
 page.on('pageerror', (e) => console.log('[pageerror]', e.message))
 await page.goto(URL, { waitUntil: 'domcontentloaded' })
 await page.waitForFunction('window.__djiDebug?.fly?.rig', undefined, { timeout: 120000 })
+// 等机臂完全展开再量:折叠态下 pod/壳位置整体偏移,读数不可比
 await page.waitForFunction('window.__djiDebug.fly.rig.armFold > 0.999', undefined, { timeout: 30000 })
 await page.waitForTimeout(800)
 
@@ -25,6 +26,7 @@ const measure = (label) =>
     const d = window.__djiDebug
     const THREE = d.THREE
     const model = d.fly.rig.model
+    // 手动刷新世界矩阵,否则 getWorldPosition/Box3 读到的是上一帧旧位姿
     model.updateMatrixWorld(true)
     const get = (name) => model.getObjectByName(name)
     const pod = get('GIMBAL_BlackCameraPod')

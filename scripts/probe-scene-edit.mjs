@@ -41,6 +41,7 @@ const projections = await page.evaluate(() => {
     const point = new THREE.Vector3()
     node.group.getWorldPosition(point)
     point.y += Math.max(1, waypoint.altitude) * 0.6
+    // 世界点投影到屏幕:x=(ndc.x+1)/2·宽, y=(1-ndc.y)/2·高
     point.project(camera)
     const x = ((point.x + 1) / 2) * window.innerWidth
     const y = ((1 - point.y) / 2) * window.innerHeight
@@ -49,6 +50,7 @@ const projections = await page.evaluate(() => {
       x: Math.round(x),
       y: Math.round(y),
       ndcZ: Number(point.z.toFixed(3)),
+      // elementFromPoint 验证该像素是否真被画布接住(而非被面板/遮挡层吃掉)
       element: document.elementFromPoint(x, y)?.tagName ?? 'none',
       inside: point.z < 1 && x > 0 && x < window.innerWidth && y > 0 && y < window.innerHeight,
     })

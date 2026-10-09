@@ -62,12 +62,14 @@ const waitStage = (stage, label) =>
 
 // 垂直段爬到一半
 await waitStage('depart-climb', '垂直调整到首航点高度')
+// 用位置阈值(y>16,单位场景米)判定垂直段已过半,而不是计时——阶段时长随倍速变化
 await page.waitForFunction('window.__djiDebug.fly.sim.position.y > 16', undefined, { timeout: 120000 })
 await page.waitForTimeout(800)
 await page.screenshot({ path: join(SHOT_DIR, 'depart-01-climb.png') })
 
 // 水平段
 await waitStage('depart-cruise', '水平飞向首个航点')
+// 同理用 z 阈值(-14,单位场景米)判定水平段已推进到停机区外
 await page.waitForFunction('window.__djiDebug.fly.sim.position.z < -14', undefined, { timeout: 120000 })
 await page.waitForTimeout(800)
 await page.screenshot({ path: join(SHOT_DIR, 'depart-02-cruise.png') })

@@ -1,0 +1,19 @@
+{
+  // 海湾竞速场景(移植自 img2threejs/preview)的独立类型检查工程。
+  //
+  // 单独开一个 project 的原因:上游代码是按"允许数组下标越界返回 undefined"写的
+  // (只开 strict),而本项目额外开启了 noUncheckedIndexedAccess。为了保持移植代码
+  // 与上游一致、便于日后 diff 同步,这里对它放宽该单项检查,其余规则沿用项目配置。
+  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  "include": ["env.d.ts", "src/race-scene/**/*"],
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": false,
+
+    // 场景控制契约是共享的 .js(schema 定义),需要允许导入 JS
+    "allowJs": true,
+    "checkJs": false,
+
+    // `vue-tsc --build` 的增量信息,与其他 project 分开存放
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.race.tsbuildinfo"
+  }
+}

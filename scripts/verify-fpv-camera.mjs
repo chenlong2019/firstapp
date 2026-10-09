@@ -4,6 +4,10 @@
  *  ——它每帧强制 lookAt(target),会把"从云台往外看"变成"停在云台位置回头看飞机"
  *  (渲染发生在 droneFly.animate 写云台位姿之前,所以画面会一直是回头的)。
  * 同时校验:机载相机世界朝向 == 云台光轴、位置 == 云台 + 沿光轴 0.12m。
+ *
+ * 用法:node scripts/verify-fpv-camera.mjs [url](默认 http://127.0.0.1:15186/dji)
+ * 前置:先构建并用 vite preview 起产物服务。
+ * 手法:给 controls.update 打桩计数,对比两种相机模式下每帧被调用的次数。
  */
 import { chromium } from 'playwright'
 
@@ -60,6 +64,7 @@ check('观察者模式下轨道控制器每帧驱动', orbitCount > 0, `1.2s 内
 
 // ② 切机载:控制器必须停摆
 await page.evaluate(() => window.__djiDebug.fly.setCameraMode('fpv'))
+// 切模式后等一拍,让渲染循环在新相机模式下跑起来再计数
 await page.waitForTimeout(600)
 const fpvCount = await countFor(1200)
 check('机载视角下轨道控制器停止驱动(修复点)', fpvCount === 0, `1.2s 内 ${fpvCount} 次`)
@@ -79,6 +84,7 @@ const pose = await page.evaluate(() => {
   const camDir = new THREE.Vector3(0, 0, -1)
     .applyQuaternion(cam.getWorldQuaternion(new THREE.Quaternion()))
     .normalize()
+  // 机载相机挂在云台镜片沿光轴前方 0.12m 处(常量,断言按此计算期望位置)
   const expectPos = podPos.clone().addScaledVector(podDir, 0.12)
   return {
     dirDot: Number(camDir.dot(podDir).toFixed(4)),
@@ -87,6 +93,7 @@ const pose = await page.evaluate(() => {
     podDir: podDir.toArray().map((n) => Number(n.toFixed(3))),
   }
 })
+// 容差:方向点积 >0.999 视为同向(排除反向),位置偏差 <1cm 视为重合
 check('机载相机朝向 == 云台光轴(同一方向,非反向)', pose.dirDot > 0.999, `dot=${pose.dirDot}`)
 check('机载相机位于云台镜片前方 0.12m', pose.posErr < 0.01, `偏差 ${pose.posErr}m`)
 check('机载视角朝机头方向(−z)', pose.camDir[2] < -0.9, `dir=${JSON.stringify(pose.camDir)}`)

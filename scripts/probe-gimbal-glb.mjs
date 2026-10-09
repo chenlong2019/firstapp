@@ -30,6 +30,7 @@ const chain = (i) => {
 }
 
 // skin joints 集合
+// 收集所有 skin joint 索引,打印时据此标注哪些节点是骨骼关节
 const joints = new Set()
 for (const s of json.skins ?? []) s.joints.forEach((j) => joints.add(j))
 // 所有 mesh 节点名
@@ -62,6 +63,7 @@ const walk = (i, depth) => {
 }
 
 // 找每个 gimbal 相关节点的顶级祖先,从祖先开始整树打印(限一次)
+// 从每个 gimbal 节点的顶级祖先整树打印一次,避免重复又不漏层级
 const tops = new Set(roots.map(({ i }) => chain(i)[0]))
 console.log('===== 云台相关节点整树 =====')
 for (const t of tops) {

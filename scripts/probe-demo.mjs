@@ -1,4 +1,9 @@
 /** 成品演示截图:展开待命(停放姿态) + 起飞悬停(旋速/无桨盘) */
+/**
+ * 用法:先起 dev server,再 `node scripts/probe-demo.mjs`;产物 .verify-shots/final-*.png。
+ * 三张:ground(展开待命)、motors-on(电机转)、hover(起飞悬停),靠 phase 轮询卡点。
+ * 坑:每张前用 camTo 重新摆机位并等一拍——相机受控制器托管,不重置会被拉回。
+ */
 import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -15,6 +20,7 @@ const shot = async (name) => {
   await page.screenshot({ path: join('.verify-shots', `final-${name}.png`) })
   console.log('shot', name)
 }
+// 相机手动摆位(同时设 fov/near),每张图前置位一次,否则会被控制器拉回
 const camTo = async (px, py, pz, ty = 0.35, fov = 34) => {
   await page.evaluate(([x, y, z, t, f]) => {
     const d = window.__djiDebug
@@ -29,6 +35,7 @@ const camTo = async (px, py, pz, ty = 0.35, fov = 34) => {
   }, [px, py, pz, ty, fov])
 }
 
+// 先展开待命:该步才是"停放姿态",电机/起飞都基于展开态
 await page.locator('[data-testid="btn-arm"]').click()
 await page.waitForFunction('window.__djiDebug.fly.rig.armFold < 0.02', undefined, { timeout: 30000 })
 await camTo(2.2, 1.0, 2.6)

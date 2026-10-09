@@ -14,8 +14,10 @@ import type { DroneWorld } from './drone-world'
  *
  * 编辑只改"航点数据",飞行逻辑一行都不碰 —— 允许编辑的前提是任务未执行(内核也会再拦一次)。
  */
+/** 拖拽模式:move=在当前高度的水平面内平移,altitude=改高度(Shift 拖拽) */
 export type MissionDragMode = 'move' | 'altitude'
 
+/** 编辑界限:home 位置用于限距判定,高度/距离上限由仿真内核下发(单位:米) */
 export interface MissionEditLimits {
   maxAltitude: number
   maxDistance: number
@@ -23,6 +25,7 @@ export interface MissionEditLimits {
   homeZ: number
 }
 
+/** 编辑器对外状态快照:enabled 是面板开关,active 还需「当前确实可编辑」(观察者视角 + 任务未执行) */
 export interface MissionEditState {
   /** 面板开关 */
   enabled: boolean
@@ -34,6 +37,10 @@ export interface MissionEditState {
   mode: MissionDragMode | null
 }
 
+/**
+ * 编辑器依赖的宿主接口:航点数据以仿真内核为权威源,编辑器只通过它读写,
+ * 因此这里不含任何三维标记的实现细节(标记由 world 负责重建)。
+ */
 export interface MissionEditorHost {
   canvas: HTMLCanvasElement
   camera: THREE.PerspectiveCamera
@@ -93,6 +100,11 @@ function snap(value: number, step: number): number {
   return Math.round(value / step) * step
 }
 
+/**
+ * 场景内航点编辑器:接管画布的指针/键盘事件,把拖拽、双击新增、删除等操作翻译成
+ * 对宿主航点数据的修改。使用:构造传入宿主 → 每帧 update() → 面板开关 setEnabled()
+ * → 卸载时 destroy()。具体操作约定见本文件顶部模块说明。
+ */
 export class MissionEditor {
   private readonly host: MissionEditorHost
   private enabled = false
@@ -198,18 +210,23 @@ export class MissionEditor {
     waypoint: MissionWaypoint,
   ): DragState {
     this.updateRaycaster(event.clientX, event.clientY)
+    // 参考面高度至少取 1 米:航点贴地时,水平参考面若落在 y=0 或以下,求交会退化
     const planeY = Math.max(1, waypoint.altitude)
     const plane = new THREE.Plane()
     if (event.shiftKey) {
       const normal = this.cameraForward.set(0, 0, 0)
       this.host.camera.getWorldDirection(normal)
       this.planeNormal.set(normal.x, 0, normal.z)
+      // 相机几乎垂直向下时水平分量退化(lengthSq≈0),回退到 +Z 法线,避免得到非法平面
       if (this.planeNormal.lengthSq() < 1e-4) this.planeNormal.set(0, 0, 1)
       this.planeNormal.normalize()
       this.hitPoint.set(waypoint.x, planeY, waypoint.z)
       plane.setFromNormalAndCoplanarPoint(this.planeNormal, this.hitPoint)
     } else {
-      plane.setFromNormalAndCoplanarPoint(this.groundNormal, this.hitPoint.set(waypoint.x, planeY, waypoint.z))
+      plane.setFromNormalAndCoplanarPoint(
+        this.groundNormal,
+        this.hitPoint.set(waypoint.x, planeY, waypoint.z),
+      )
     }
     const ref = this.raycaster.ray.intersectPlane(plane, this.hitPoint)
     return {
@@ -255,7 +272,10 @@ export class MissionEditor {
     this.emptyClick = null
     const drag = this.drag
     if (!drag) {
-      if (emptyClick && Math.hypot(event.clientX - emptyClick.x, event.clientY - emptyClick.y) < DRAG_THRESHOLD_PX) {
+      if (
+        emptyClick &&
+        Math.hypot(event.clientX - emptyClick.x, event.clientY - emptyClick.y) < DRAG_THRESHOLD_PX
+      ) {
         this.host.setSelected(-1)
       }
       return
@@ -355,15 +375,23 @@ export class MissionEditor {
     const altitude = hit
       ? drag.startAltitude + (hit.y - drag.refY)
       : drag.startAltitude - (event.clientY - drag.startClientY) * this.metersPerPixel(drag)
-    this.host.moveWaypoint(drag.index, { altitude: clamp(snap(altitude, step), 1, this.host.getLimits().maxAltitude) })
+    this.host.moveWaypoint(drag.index, {
+      altitude: clamp(snap(altitude, step), 1, this.host.getLimits().maxAltitude),
+    })
   }
 
   /** 该航点所在距离上"一个屏幕像素"对应多少米(竖直面打不中时的兜底映射) */
   private metersPerPixel(drag: DragState): number {
     const camera = this.host.camera
-    const distance = camera.position.distanceTo(this.hitPoint.set(drag.startX, drag.startAltitude, drag.startZ))
-    const height = (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance) / Math.max(0.01, camera.zoom)
+    const distance = camera.position.distanceTo(
+      this.hitPoint.set(drag.startX, drag.startAltitude, drag.startZ),
+    )
+    // 视锥在 distance 处的可见高度 = 2·tan(fov/2)·distance;再按画布像素高度折算成米/像素
+    const height =
+      (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance) /
+      Math.max(0.01, camera.zoom)
     const rect = this.host.canvas.getBoundingClientRect()
+    // 画布尚未布局(高度为 0)时给 0.2 米/像素的保守兜底,避免除零
     return rect.height > 0 ? height / rect.height : 0.2
   }
 
@@ -381,6 +409,7 @@ export class MissionEditor {
   private updateRaycaster(clientX: number, clientY: number): void {
     const rect = this.host.canvas.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return
+    // 屏幕像素 → 归一化设备坐标(NDC):y 轴要翻转(屏幕向下为正,NDC 向上为正)
     this.pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1
     this.pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1
     this.raycaster.setFromCamera(this.pointer, this.host.camera)
@@ -406,12 +435,8 @@ export class MissionEditor {
     homeX: number,
     homeZ: number,
   ): number {
-    const distance = (
-      fromX: number,
-      fromZ: number,
-      toX: number,
-      toZ: number,
-    ): number => Math.hypot(toX - fromX, toZ - fromZ)
+    const distance = (fromX: number, fromZ: number, toX: number, toZ: number): number =>
+      Math.hypot(toX - fromX, toZ - fromZ)
     let bestIndex = 0
     let bestDetour = Number.POSITIVE_INFINITY
     for (let index = 0; index <= list.length; index += 1) {
@@ -420,8 +445,11 @@ export class MissionEditor {
       const fromX = previous ? previous.x : homeX
       const fromZ = previous ? previous.z : homeZ
       const detour = next
-        ? distance(fromX, fromZ, x, z) + distance(x, z, next.x, next.z) - distance(fromX, fromZ, next.x, next.z)
+        ? distance(fromX, fromZ, x, z) +
+          distance(x, z, next.x, next.z) -
+          distance(fromX, fromZ, next.x, next.z)
         : distance(fromX, fromZ, x, z) // 接到队尾:只看从上一个航点飞过去的距离
+      // 减去 1e-6 容差:浮点上打成平手时保留更靠前的插入位,避免结果抖动
       if (detour < bestDetour - 1e-6) {
         bestDetour = detour
         bestIndex = index

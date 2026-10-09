@@ -24,11 +24,13 @@ const out = await page.evaluate(() => {
   const model = d.fly.rig.model
   model.updateMatrixWorld(true)
   const get = (name) => model.getObjectByName(name)
+  // 姿态探针统一看节点局部 -Z 的世界指向(相机/镜头前向)
   const axisOf = (obj) =>
     new THREE.Vector3(0, 0, -1).transformDirection(obj.matrixWorld).toArray().map((n) => Number(n.toFixed(4)))
   const roll = get('CTRL_Gimbal_Roll')
   const pod = get('GIMBAL_BlackCameraPod')
   // pod 相对 roll 的本地四元数(取 roll 系)
+  // pod 相对 roll 的本地四元数 = roll 世界逆 ⊗ pod 世界;据此判断 FPV 朝向反转来自哪一层
   const relQ = roll
     .getWorldQuaternion(new THREE.Quaternion())
     .invert()

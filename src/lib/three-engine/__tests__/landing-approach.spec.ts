@@ -32,13 +32,16 @@ function runUntil(sim: DroneSim, predicate: () => boolean, maxSeconds: number): 
 function hoveringSim(): DroneSim {
   const sim = new DroneSim()
   sim.powerOn()
-  if (!runUntil(sim, () => sim.phase === 'standby', 20)) throw new Error(`未能进入地面待机:${sim.phase}`)
+  if (!runUntil(sim, () => sim.phase === 'standby', 20))
+    throw new Error(`未能进入地面待机:${sim.phase}`)
   sim.autoTakeOff()
   if (!runUntil(sim, () => sim.airborne, 15)) throw new Error('未能离地')
   return sim
 }
 
+// 验证自动降落按三段推进:降向 1 米悬停位 → 低位悬停确认 → 低速触地停桨
 describe('自动降落 · 先停 1 米再缓慢触地', () => {
+  // 从 10 米巡航高度降落:应先进 hold 段、高度停在 1 米且垂直速度为 0,并锁定不再下滑
   it('从巡航高度降落时先在 1 米处停住', () => {
     const sim = hoveringSim()
     // 抬到巡航高度,模拟飞完一圈再按降落
@@ -59,6 +62,7 @@ describe('自动降落 · 先停 1 米再缓慢触地', () => {
     expect(sim.airborne).toBe(true)
   })
 
+  // hold 之后进入 settle 缓降:最后 1 米耗时明显长于常规下降挡(>2s),落地后停在 standby 且电机载荷归零
   it('悬停确认结束后以低速触地并停桨', () => {
     const sim = hoveringSim()
     sim.position.y = 10
@@ -66,7 +70,10 @@ describe('自动降落 · 先停 1 米再缓慢触地', () => {
 
     expect(runUntil(sim, () => sim.snapshot().landingStage === 'settle', 30)).toBe(true)
     const settleStartedAt = sim.snapshot().totalTime
-    expect(runUntil(sim, () => sim.phase === 'standby', 20), '应当完成触地').toBe(true)
+    expect(
+      runUntil(sim, () => sim.phase === 'standby', 20),
+      '应当完成触地',
+    ).toBe(true)
 
     // 1 米按 0.3 m/s 缓降:明显慢于常规下降挡(3 m/s 只需 0.3 秒)
     const seconds = sim.snapshot().totalTime - settleStartedAt
@@ -75,6 +82,7 @@ describe('自动降落 · 先停 1 米再缓慢触地', () => {
     expect(sim.snapshot().motorLoad).toBe(0)
   })
 
+  // 起始高度(0.6m)已低于 1 米悬停位:不应被抬升,直接进 settle,且高度只降不升
   it('已经贴近地面时不再抬升到悬停位,直接缓降', () => {
     const sim = hoveringSim()
     sim.position.y = 0.6
@@ -86,6 +94,7 @@ describe('自动降落 · 先停 1 米再缓慢触地', () => {
     expect(runUntil(sim, () => sim.phase === 'standby', 20)).toBe(true)
   })
 
+  // 智能返航的降落段复用同一套三段式:同样要先到 1 米悬停位,再触地停桨
   it('智能返航的降落段同样在 1 米悬停确认', () => {
     const sim = hoveringSim()
     // 挪到返航点正北 20 米(-Z 是北),机头朝北,返航航向为南
@@ -99,6 +108,9 @@ describe('自动降落 · 先停 1 米再缓慢触地', () => {
       '返航下降应当同样停在 1 米悬停位',
     ).toBe(true)
     expect(sim.position.y).toBeCloseTo(HOLD_ALTITUDE, 5)
-    expect(runUntil(sim, () => sim.phase === 'standby', 30), '返航后应当完成降落').toBe(true)
+    expect(
+      runUntil(sim, () => sim.phase === 'standby', 30),
+      '返航后应当完成降落',
+    ).toBe(true)
   })
 })

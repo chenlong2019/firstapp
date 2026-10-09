@@ -1,6 +1,20 @@
+<!--
+  Road-MVT.vue —— /roads 页面:Cesium 三维地球上渲染矢量瓦片(MVT)路网。
+
+  职责:基于道路瓦片场景(src/lib/road-mvt-scene.ts)提供三块 UI —— 左上道路搜索、
+  左下空间查询(点/线/面)、右下道路图例,以及右上性能指标与选中道路信息。
+
+  非直觉约定:
+  - Cesium 以全局脚本引入(index.html 的 /Cesium/Cesium.js),全局名 `Cesium`,类型见 src/types/cesium.d.ts。
+  - 瓦片/搜索/空间查询接口默认指向 http://127.0.0.1:3001,可用环境变量 VITE_MVT_URL 覆盖;
+    本组件只负责发起请求与展示,几何高亮与相机飞行都在场景类内完成。
+  - FPS 与「加载线数量」每 500ms 向场景读取一次,不做逐帧刷新。
+-->
 <template>
   <div class="road-mvt">
+    <!-- Cesium 三维地球挂载容器:场景实例在 onMounted 中创建 -->
     <div class="div-viewer" ref="mapRef"></div>
+    <!-- 左上:道路搜索面板(按名称/编号搜索,点击结果后聚焦该道路) -->
     <div class="road-search">
       <form class="search-form" @submit.prevent="searchRoads">
         <input
@@ -30,6 +44,7 @@
         </button>
       </div>
     </div>
+    <!-- 左下:空间查询面板(点/线/面绘制 → 检索相交道路 → 分页展示结果) -->
     <div class="spatial-query-panel">
       <div class="spatial-query-title">空间查询</div>
       <div class="spatial-query-actions">
@@ -37,17 +52,23 @@
           type="button"
           :class="{ active: spatialActiveType === 'point' }"
           @click="startSpatialQuery('point')"
-        >点</button>
+        >
+          点
+        </button>
         <button
           type="button"
           :class="{ active: spatialActiveType === 'line' }"
           @click="startSpatialQuery('line')"
-        >线</button>
+        >
+          线
+        </button>
         <button
           type="button"
           :class="{ active: spatialActiveType === 'polygon' }"
           @click="startSpatialQuery('polygon')"
-        >面</button>
+        >
+          面
+        </button>
         <button v-if="spatialActiveType" type="button" class="muted" @click="cancelSpatialQuery">
           取消
         </button>
@@ -63,7 +84,9 @@
       <div v-if="spatialResults.length" class="spatial-results">
         <div class="spatial-result-count">
           命中 {{ spatialTotal }} 条道路
-          <span v-if="spatialResults.length < spatialTotal"> · 已加载 {{ spatialResults.length }} 条</span>
+          <span v-if="spatialResults.length < spatialTotal">
+            · 已加载 {{ spatialResults.length }} 条</span
+          >
         </div>
         <button
           v-for="road in visibleSpatialResults"
@@ -80,12 +103,22 @@
         </button>
       </div>
       <div v-if="spatialPageCount > 1" class="spatial-pagination">
-        <button type="button" :disabled="spatialPage === 1" @click="spatialPage -= 1">上一页</button>
+        <button type="button" :disabled="spatialPage === 1" @click="spatialPage -= 1">
+          上一页
+        </button>
         <span>{{ spatialPage }} / {{ spatialPageCount }} 页</span>
-        <button type="button" :disabled="spatialPage === spatialPageCount" @click="spatialPage += 1">下一页</button>
+        <button
+          type="button"
+          :disabled="spatialPage === spatialPageCount"
+          @click="spatialPage += 1"
+        >
+          下一页
+        </button>
       </div>
     </div>
+    <!-- 左下角状态提示:连接瓦片服务的过程/结果,hasError 时切换到错误配色 -->
     <div v-if="status" class="map-status" :class="{ error: hasError }">{{ status }}</div>
+    <!-- 右上:性能面板(FPS 与当前已加载瓦片的要素总数) -->
     <div class="performance-panel">
       <div class="performance-item">
         <span class="performance-label">FPS</span>
@@ -96,13 +129,18 @@
         <strong>{{ metrics.loadedLineCount.toLocaleString('zh-CN') }}</strong>
       </div>
     </div>
+    <!-- 右下:道路类型图例(色带与线宽对应场景内的分级样式) -->
     <div class="road-legend">
       <div class="legend-title">道路类型</div>
       <div v-for="item in roadLegend" :key="item.label" class="legend-item">
-        <span class="legend-line" :style="{ backgroundColor: item.color, height: `${item.width}px` }"></span>
+        <span
+          class="legend-line"
+          :style="{ backgroundColor: item.color, height: `${item.width}px` }"
+        ></span>
         <span>{{ item.label }}</span>
       </div>
     </div>
+    <!-- 右上:选中道路的属性信息面板(点选或聚焦某条道路时出现) -->
     <div v-if="selectedRoad" class="road-info">
       <div class="info-header">
         <strong>道路信息</strong>
@@ -132,12 +170,18 @@ const searchMessage = ref('')
 const spatialResults = ref<RoadInfo[]>([])
 const spatialTotal = ref(0)
 const spatialPage = ref(1)
+// 结果展示分页大小:场景层已把查询结果累积推送过来,这里只做前端分页,避免一次渲染上千条
 const spatialPageSize = 100
-const spatialPageCount = computed(() => Math.max(1, Math.ceil(spatialResults.value.length / spatialPageSize)))
-const visibleSpatialResults = computed(() => spatialResults.value.slice(
-  (spatialPage.value - 1) * spatialPageSize,
-  spatialPage.value * spatialPageSize,
-))
+const spatialPageCount = computed(() =>
+  Math.max(1, Math.ceil(spatialResults.value.length / spatialPageSize)),
+)
+// 只渲染当前页,避免结果集很大时一次性铺满 DOM
+const visibleSpatialResults = computed(() =>
+  spatialResults.value.slice(
+    (spatialPage.value - 1) * spatialPageSize,
+    spatialPage.value * spatialPageSize,
+  ),
+)
 const spatialActiveType = ref<SpatialQueryType | null>(null)
 const spatialQueryLoading = ref(false)
 const hasSpatialQuery = ref(false)
@@ -148,14 +192,18 @@ const metrics = ref({ fps: 0, loadedLineCount: 0 })
 const selectedRoad = ref<RoadInfo | null>(null)
 let roadMvtScene: RoadMvtScene | undefined
 let metricsTimer: number | undefined
+// 道路服务地址:优先取 VITE_MVT_URL,未配置时回退到本地默认端口(需先启动 Node 服务)
 const roadApiUrl = import.meta.env.VITE_MVT_URL ?? 'http://127.0.0.1:3001'
 
+/** 三种空间查询模式的操作提示文案,展示在面板中 */
 const spatialQueryHints: Record<SpatialQueryType, string> = {
+  // 150 米是点查询的邻域半径,与场景层空间查询的 pointToleranceMeters 一致,改动需同步
   point: '点击地图查询附近道路（半径 150 米）',
   line: '单击添加至少 2 个节点，移动鼠标预览，双击完成，右键取消',
   polygon: '单击添加至少 3 个节点，移动鼠标预览，双击完成，右键取消',
 }
 
+/** OSM fclass → 中文名映射(只列常用类型;未命中时回退显示原始 fclass) */
 const roadTypeNames: Record<string, string> = {
   motorway: '高速公路',
   motorway_link: '高速公路连接线',
@@ -172,6 +220,7 @@ const roadTypeNames: Record<string, string> = {
   steps: '台阶',
 }
 
+/** 把选中道路的属性整理成信息面板的行;无选中时返回空数组 */
 const roadInfoRows = computed(() => {
   const road = selectedRoad.value
   if (!road) return []
@@ -180,6 +229,7 @@ const roadInfoRows = computed(() => {
     if (value === undefined || value === null || value === '') return '未提供'
     return String(value)
   }
+  // OSM/瓦片服务里布尔字段编码不统一('T'/'F'、'1'/'0' 或真正的 boolean),这里统一归一
   const yesNo = (value: unknown) => {
     if (value === 'F' || value === '0' || value === false) return '否'
     if (value === 'T' || value === '1' || value === true) return '是'
@@ -198,6 +248,7 @@ const roadInfoRows = computed(() => {
   ]
 })
 
+// 图例的颜色/线宽需与 src/lib/road-mvt-scene.ts 里 roadStyle 的取值保持一致,否则图例会失真
 const roadLegend = [
   { label: '高速公路', color: '#e7863d', width: 4.2 },
   { label: '快速路', color: '#eea548', width: 3.5 },
@@ -208,6 +259,7 @@ const roadLegend = [
   { label: '步行/小路', color: '#cfb487', width: 1 },
 ]
 
+/** 挂载后创建道路瓦片场景,并起一个 500ms 定时器轮询性能指标;失败则提示服务未启动 */
 onMounted(async () => {
   if (!mapRef.value) return
 
@@ -220,6 +272,7 @@ onMounted(async () => {
       handleSpatialQueryEvent,
     )
     status.value = '道路瓦片已连接'
+    // 500ms 采样一次即可:场景内 FPS 也是按约 500ms 窗口统计的,无需逐帧刷新
     metricsTimer = window.setInterval(() => {
       if (roadMvtScene) {
         metrics.value = roadMvtScene.getMetrics()
@@ -232,10 +285,12 @@ onMounted(async () => {
   }
 })
 
+/** 关闭道路信息面板并清除地图上的道路高亮 */
 function clearRoadSelection(): void {
   roadMvtScene?.clearSelection()
 }
 
+/** 按名称/编号搜索道路,最多取前 10 条;结果仅填充列表,点击后才聚焦 */
 async function searchRoads(): Promise<void> {
   const query = searchText.value.trim()
   if (!query) return
@@ -265,12 +320,14 @@ async function searchRoads(): Promise<void> {
   }
 }
 
+/** 聚焦搜索结果中的某条道路:收起结果列表,交给场景执行高亮与飞行 */
 function focusSearchRoad(road: RoadInfo): void {
   searchResults.value = []
   searchMessage.value = ''
   roadMvtScene?.focusRoad(road)
 }
 
+/** 进入指定类型的空间查询绘制态,先清掉上一轮的选中与结果 */
 function startSpatialQuery(type: SpatialQueryType): void {
   selectedRoad.value = null
   spatialResults.value = []
@@ -278,10 +335,12 @@ function startSpatialQuery(type: SpatialQueryType): void {
   roadMvtScene?.startSpatialQuery(type)
 }
 
+/** 取消当前正在绘制/查询的空间查询(不影响已展示的结果) */
 function cancelSpatialQuery(): void {
   roadMvtScene?.cancelSpatialQuery()
 }
 
+/** 清除空间查询的结果图层与页面状态,复位到初始态 */
 function clearSpatialQuery(): void {
   roadMvtScene?.clearSpatialQuery()
   hasSpatialQuery.value = false
@@ -293,11 +352,17 @@ function clearSpatialQuery(): void {
   spatialMessage.value = ''
 }
 
+/** 聚焦空间查询结果中的某条道路,并同时展开它的信息面板 */
 function focusSpatialRoad(road: RoadInfo): void {
   roadMvtScene?.focusRoad(road)
   selectedRoad.value = road
 }
 
+/**
+ * 场景层空间查询事件的状态机,按 event.status 切换页面 UI:
+ * drawing=开始绘制,searching=检索中,progress=分页增量(累加结果),
+ * completed=完成,error=出错;其余(含 cancelled)一律复位到空闲态。
+ */
 function handleSpatialQueryEvent(event: SpatialQueryEvent): void {
   if (event.status === 'drawing') {
     hasSpatialQuery.value = false
@@ -317,6 +382,7 @@ function handleSpatialQueryEvent(event: SpatialQueryEvent): void {
     return
   }
   if (event.status === 'progress') {
+    // 场景层按页推送增量,这里累加;total 是命中总数,可能大于已加载条数
     spatialResults.value.push(...(event.roads ?? []))
     spatialTotal.value = event.total ?? spatialResults.value.length
     return
@@ -325,9 +391,7 @@ function handleSpatialQueryEvent(event: SpatialQueryEvent): void {
     spatialActiveType.value = null
     spatialQueryLoading.value = false
     spatialTotal.value = event.total ?? spatialResults.value.length
-    spatialMessage.value = spatialResults.value.length
-      ? ''
-      : '没有找到相交的道路'
+    spatialMessage.value = spatialResults.value.length ? '' : '没有找到相交的道路'
     return
   }
   if (event.status === 'error') {
@@ -341,6 +405,7 @@ function handleSpatialQueryEvent(event: SpatialQueryEvent): void {
   spatialMessage.value = ''
 }
 
+/** 卸载时清掉性能定时器并销毁场景,释放 Cesium viewer 与各处监听 */
 onUnmounted(() => {
   if (metricsTimer !== undefined) {
     window.clearInterval(metricsTimer)

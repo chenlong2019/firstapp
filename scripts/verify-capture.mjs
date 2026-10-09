@@ -5,6 +5,10 @@
  *  - 机载视角下拍的照片与屏幕画面一致(同一取景);
  *  - 录像:开始→REC 徽标与计时;停止→自动下载 webm(EBML 魔数)并写事件日志;
  *    仿真侧主动停录(重置)也要收尾。
+ *
+ * 用法:node scripts/verify-capture.mjs [url](默认 http://127.0.0.1:15186/dji)
+ * 前置:先构建并用 vite preview 起产物服务;context 必须 acceptDownloads 才能收到下载。
+ * 坑:比对照片与屏幕画面前,要先临时隐藏盖在画布上的 UI 覆盖层,否则比的是 UI。
  */
 import { chromium } from 'playwright'
 import fs from 'node:fs'
@@ -44,6 +48,7 @@ page.on('download', async (download) => {
 
 await page.goto(URL, { waitUntil: 'domcontentloaded' })
 await page.waitForFunction('window.__djiDebug?.fly?.rig', undefined, { timeout: 120000 })
+// 先展开机臂(armFold→0),否则云台取景会被折叠的桨叶挡住
 await page.evaluate(() => window.__djiDebug.fly.setArmFoldTarget(0))
 await page.waitForFunction('window.__djiDebug.fly.rig.armFold < 0.02', undefined, { timeout: 30000 })
 await page.waitForTimeout(1200)
@@ -81,6 +86,7 @@ check(
 
 const photoDownload = downloads.find((item) => item.name.endsWith('.png'))
 check('照片自动下载', Boolean(photoDownload), photoDownload ? photoDownload.name : `下载 ${downloads.length} 个`)
+// PNG 魔数 89 50 4E 47:校验前两字节 0x89 0x50,并要求体积 >20KB 排除空图
 check(
   '下载文件是合法 PNG',
   Boolean(photoDownload && photoDownload.size > 20_000 && photoDownload.head[0] === 0x89 && photoDownload.head[1] === 0x50),
@@ -137,6 +143,7 @@ const compareWithCanvas = async (dataUrl) => {
   )
 }
 const orbitCompare = await compareWithCanvas(photoState.thumb)
+// 经验阈值 8:同取景平均像素差远小于 8,不同取景明显大于 8(下方机载用例反过来用 <8 判同一取景)
 check(
   '观察者视角下照片 ≠ 屏幕画面(拍到的是云台取景)',
   !orbitCompare.sizeMismatch && orbitCompare.meanDiff > 8,
@@ -182,6 +189,7 @@ check('停止录像:状态复位', !afterRec.simRecording && !afterRec.engineRec
 check('事件日志记录录像结束', afterRec.events.some((text) => text.includes('录像结束')), afterRec.events[0] ?? '')
 const videoDownload = downloads.find((item) => item.name.endsWith('.webm'))
 check('录像自动下载', Boolean(videoDownload), videoDownload ? videoDownload.name : `下载 ${downloads.length} 个`)
+// WebM 是 EBML 容器,魔数 1A 45 DF A3:校验前两字节 0x1a 0x45 并排除过小文件
 check(
   '下载文件是合法 WebM(EBML 魔数)',
   Boolean(videoDownload && videoDownload.size > 2_000 && videoDownload.head[0] === 0x1a && videoDownload.head[1] === 0x45),

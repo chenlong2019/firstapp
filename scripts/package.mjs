@@ -37,6 +37,7 @@ function childEnv() {
 
 function run(cmd, cmdArgs, label) {
   console.log(`\n== ${label} ==`)
+  // shell:false 直接 exec,避免 Windows 下经 cmd 重新解析带空格/引号的路径
   const result = spawnSync(cmd, cmdArgs, { cwd: ROOT, env: childEnv(), stdio: 'inherit', shell: false })
   if (result.status !== 0) {
     throw new Error(`${label} 失败(exit ${result.status})`)
@@ -68,9 +69,16 @@ function cleanStale() {
 async function main() {
   cleanStale()
 
+  // 从项目 package.json 解析依赖,拿到 vite 可执行文件在 node_modules 里的绝对路径
   const require_ = createRequire(path.join(ROOT, 'package.json'))
   if (!skipBuild) {
-    const viteBin = require_.resolve('vite/bin/vite.js')
+    // vite 8 收紧了 package.json 的 exports,不再暴露 ./bin/vite.js(直接 resolve 会报
+    // "Package subpath './bin/vite.js' is not defined by exports")。
+    // 改从包的 package.json(bin 字段仍指向真实 CLI)推出可执行文件路径,与版本解耦。
+    const vitePkgPath = require_.resolve('vite/package.json')
+    const vitePkg = JSON.parse(fs.readFileSync(vitePkgPath, 'utf8'))
+    const viteBinRel = typeof vitePkg.bin === 'string' ? vitePkg.bin : vitePkg.bin.vite
+    const viteBin = path.join(path.dirname(vitePkgPath), viteBinRel)
     run(process.execPath, [viteBin, 'build'], 'vite build')
   } else {
     console.log('\n== 跳过 vite build(--skip-build) ==')

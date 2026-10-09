@@ -32,7 +32,8 @@ function runUntil(sim: DroneSim, predicate: () => boolean, maxSeconds: number): 
 function hoveringSim(): DroneSim {
   const sim = new DroneSim()
   sim.powerOn()
-  if (!runUntil(sim, () => sim.phase === 'standby', 20)) throw new Error(`未能进入地面待机:${sim.phase}`)
+  if (!runUntil(sim, () => sim.phase === 'standby', 20))
+    throw new Error(`未能进入地面待机:${sim.phase}`)
   sim.autoTakeOff()
   if (!runUntil(sim, () => sim.airborne, 15)) throw new Error('未能离地')
   return sim
@@ -43,7 +44,9 @@ function headingGap(from: number, to: number): number {
   return Math.abs(((to - from + 540) % 360) - 180)
 }
 
+// 验证返航姿态控制:机头未对准返航航向之前原地转向,不产生水平位移;对准后再沿机头飞回返航点
 describe('智能返航 · 先对准再前进', () => {
+  // 进入 cruise 后 2 秒内:航向明显改变(>45°),但水平位移很小(<1.5m),证明是原地转向而非弧线
   it('机头没对准返航航向时原地转向,不带着位移一起转', () => {
     const sim = hoveringSim()
     // 挪到返航点正北 30 米(-Z 是北),机头仍朝北 0°
@@ -69,6 +72,7 @@ describe('智能返航 · 先对准再前进', () => {
     expect(drifted, `机头对准之前不应当明显位移(实际 ${drifted.toFixed(2)} m)`).toBeLessThan(1.5)
   })
 
+  // 对准后应走完 巡航→下降→降落,最终落在返航点附近(偏差<1.5m)且已落地
   it('对准之后沿机头方向飞回返航点并自动降落', () => {
     const sim = hoveringSim()
     sim.position.x = 0
@@ -82,7 +86,10 @@ describe('智能返航 · 先对准再前进', () => {
     ).toBe(true)
 
     const distanceToHome = Math.hypot(sim.position.x, sim.position.z)
-    expect(distanceToHome, `应当落在返航点附近(实际偏离 ${distanceToHome.toFixed(2)} m)`).toBeLessThan(1.5)
+    expect(
+      distanceToHome,
+      `应当落在返航点附近(实际偏离 ${distanceToHome.toFixed(2)} m)`,
+    ).toBeLessThan(1.5)
     expect(sim.airborne).toBe(false)
   })
 })

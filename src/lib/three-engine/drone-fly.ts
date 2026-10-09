@@ -1,3 +1,13 @@
+/**
+ * 飞行沙盒的"装配层 + 主循环":把仿真内核(drone-sim)、模型机械(drone-rig)、场景辅助(drone-world)、
+ * 灯光(drone-lights)、雷达(drone-radar)接成一个可交互的三维飞行场景。
+ *
+ * 职责边界:本文件只做"推进仿真 + 把仿真状态映射到场景与相机";飞行物理在 drone-sim、
+ * 模型骨骼动画在 drone-rig,各子系统实现各归其模块。
+ *
+ * 对外导出 DroneFly(宿主类)、statusPatternFor(灯语映射)、DRONE_MAX_SPEED_METERS_PER_SECOND 及相机/拍照/录像类型,并转出 drone-sim / mission-editor 的公共类型。
+ * 非直觉约定:仿真用固定步长 1/60 推进、每帧只调一次 syncPose 写入场景;非 orbit 视角不得调 controls.update();拍照/录像共用云台取景相机位姿。
+ */
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -30,7 +40,9 @@ export const DRONE_MAX_SPEED_METERS_PER_SECOND = FLIGHT_MODES.sport.horizontalSp
 
 /** 旧版方向键 API(仅保留给外部复用) */
 export type DroneDirection = 'up' | 'down' | 'left' | 'right'
+/** 纯升降方向 */
 export type DroneVerticalDirection = 'up' | 'down'
+/** 纯偏航(左右转向)方向 */
 export type DroneRotationDirection = 'left' | 'right'
 
 export type {
@@ -45,8 +57,10 @@ export type {
 } from './drone-sim'
 export type { MissionDragMode, MissionEditState, MissionEditorHost } from './mission-editor'
 
+/** 相机视角模式:orbit=观察者(轨道控制器),follow=跟随,fpv=机载(云台视角) */
 export type CameraMode = 'orbit' | 'follow' | 'fpv'
 
+/** 面板用的相机模式列表(含中文标签) */
 export const CAMERA_MODE_LIST: Array<{ key: CameraMode; label: string }> = [
   { key: 'orbit', label: '观察者' },
   { key: 'follow', label: '跟随' },
@@ -87,7 +101,8 @@ interface CameraRestore {
 }
 
 function pickRecordMime(): string | undefined {
-  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return undefined
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function')
+    return undefined
   return RECORD_MIME_CANDIDATES.find((mime) => MediaRecorder.isTypeSupported(mime))
 }
 
@@ -181,6 +196,7 @@ export class DroneFly {
     this.controls = controls
   }
 
+  /** 加载 GLB 模型、装配机械/灯光/场景/雷达/编辑器各子系统并挂入场景,最后做一次初始同步 */
   async initialize(): Promise<void> {
     if (!this.scene || this.destroyed) return
 
@@ -192,6 +208,7 @@ export class DroneFly {
     const model = gltf.scene
     model.name = 'DJI Mini 4 Pro'
     this.normalizeModel(model)
+    // 模型已归一到"底面对齐 y=0",记录其基准高度作为地面偏移;机体高度一律加这个偏移(见 syncPose / updateCamera)
     this.groundOffsetY = model.position.y
     model.traverse((object) => {
       const mesh = object as THREE.Mesh
@@ -390,7 +407,7 @@ export class DroneFly {
         world.setMissionPathVisible(this.missionPathVisible)
         world.setMissionSelection(this.missionEditSelected)
       }
-      const active = sim.missionIndex >= 0 ? sim.mission[sim.missionIndex] ?? null : null
+      const active = sim.missionIndex >= 0 ? (sim.mission[sim.missionIndex] ?? null) : null
       world.setMissionActive(
         active ? sim.missionIndex : -1,
         active ? { x: active.x, z: active.z, altitude: active.altitude } : null,
@@ -459,6 +476,7 @@ export class DroneFly {
 
   // ————————————————————————————— 相机 —————————————————————————————
 
+  /** 切换相机视角;进出机载视角时保存/归还轨道视角的缩放(变焦只在机载下生效) */
   setCameraMode(mode: CameraMode): void {
     const previous = this.cameraMode
     this.cameraMode = mode
@@ -473,7 +491,11 @@ export class DroneFly {
     }
     if (mode === 'orbit') {
       // 回到观察者视角时保留当前朝向,只把控制点交还给轨道控制器
-      this.cameraTarget.set(this.sim.position.x, this.groundOffsetY + this.sim.position.y, this.sim.position.z)
+      this.cameraTarget.set(
+        this.sim.position.x,
+        this.groundOffsetY + this.sim.position.y,
+        this.sim.position.z,
+      )
       this.controls?.target.copy(this.cameraTarget)
     }
   }
@@ -564,7 +586,12 @@ export class DroneFly {
       return
     }
     const restore = this.snapshotCamera()
-    if (!this.applyGimbalCameraPose(camera, { offset: GIMBAL_CAMERA_OFFSET, zoom: this.sim.cameraZoom })) {
+    if (
+      !this.applyGimbalCameraPose(camera, {
+        offset: GIMBAL_CAMERA_OFFSET,
+        zoom: this.sim.cameraZoom,
+      })
+    ) {
       // 云台还不可用(模型没载完):这一帧没有可录内容,下一帧再说
       return
     }
@@ -635,6 +662,7 @@ export class DroneFly {
 
   // ————————————————————————————— 录像 —————————————————————————————
 
+  /** 当前是否正在屏录(以 MediaRecorder 实例是否存在为准) */
   get isRecording(): boolean {
     return this.recorder !== null
   }
@@ -643,7 +671,12 @@ export class DroneFly {
   startRecording(): boolean {
     if (this.recorder) return true
     const canvas = this.renderer?.domElement as HTMLCanvasElement | undefined
-    if (!canvas || typeof MediaRecorder === 'undefined' || typeof canvas.captureStream !== 'function') return false
+    if (
+      !canvas ||
+      typeof MediaRecorder === 'undefined' ||
+      typeof canvas.captureStream !== 'function'
+    )
+      return false
     // 录制源用独立离屏画布:每帧只往里搬一帧云台取景,主画布上用户视角的渲染
     // 永远不会污染录制流(画布捕获按"绘制之后"抓帧,直接抓主画布会录到用户视角)。
     const recordCanvas = document.createElement('canvas')
@@ -707,7 +740,9 @@ export class DroneFly {
         this.recordStream = null
         this.captureTrack = null
         this.recordContext = null
-        const blob = chunks.length ? new Blob(chunks, { type: recorder.mimeType || 'video/webm' }) : null
+        const blob = chunks.length
+          ? new Blob(chunks, { type: recorder.mimeType || 'video/webm' })
+          : null
         if (blob) this.onRecordingReady?.(blob, seconds)
         resolve(blob)
       }
@@ -722,6 +757,7 @@ export class DroneFly {
     })
   }
 
+  /** 按当前相机模式摆放相机:机载=云台位姿,跟随=平滑尾随,观察者=交给轨道控制器 */
   private updateCamera(delta: number): void {
     const camera = this.camera
     if (!camera) return
@@ -734,16 +770,17 @@ export class DroneFly {
 
     if (this.cameraMode === 'fpv') {
       // 相机位姿 = 云台光轴(含变焦);取景逻辑与拍照共用同一套
-      this.applyGimbalCameraPose(camera, { offset: GIMBAL_CAMERA_OFFSET, zoom: this.sim.cameraZoom })
+      this.applyGimbalCameraPose(camera, {
+        offset: GIMBAL_CAMERA_OFFSET,
+        zoom: this.sim.cameraZoom,
+      })
       return
     }
 
     if (this.cameraMode === 'follow') {
       const rad = (sim.heading * Math.PI) / 180
       this.forwardVector.set(Math.sin(rad), 0, -Math.cos(rad))
-      this.followPosition
-        .copy(dronePosition)
-        .addScaledVector(this.forwardVector, -FOLLOW_DISTANCE)
+      this.followPosition.copy(dronePosition).addScaledVector(this.forwardVector, -FOLLOW_DISTANCE)
       this.followPosition.y += FOLLOW_HEIGHT
       camera.position.lerp(this.followPosition, Math.min(1, delta * 4))
       this.followLookAt.copy(dronePosition)
@@ -766,6 +803,7 @@ export class DroneFly {
     }
   }
 
+  /** 复位相机:回到观察者视角、还原缩放,并把机位重置到飞机斜后上方 */
   resetCamera(): void {
     if (!this.camera || !this.controls) return
     this.setCameraMode('orbit')
@@ -820,13 +858,11 @@ export class DroneFly {
 
     const center = new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2)
     center.y += this.groundOffsetY
-    const radius = Math.max(
-      12,
-      0.5 * Math.hypot(maxX - minX, maxY - minY, maxZ - minZ),
-    )
+    const radius = Math.max(12, 0.5 * Math.hypot(maxX - minX, maxY - minY, maxZ - minZ))
     const halfVertical = THREE.MathUtils.degToRad(camera.fov / 2)
     const halfHorizontal = Math.atan(Math.tan(halfVertical) * Math.max(0.2, camera.aspect))
-    const distance = Math.max(radius / Math.tan(halfVertical), radius / Math.tan(halfHorizontal)) * 1.35
+    const distance =
+      Math.max(radius / Math.tan(halfVertical), radius / Math.tan(halfHorizontal)) * 1.35
 
     this.setCameraMode('orbit')
     // 关掉"控制点跟飞机":否则摆好的画面会在几秒内被拖回飞机身上

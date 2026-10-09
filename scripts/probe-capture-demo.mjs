@@ -21,7 +21,9 @@ await page.waitForTimeout(1000)
 
 // 上电 + 取景:机载视角、云台 −25°(俯瞰地面)
 await page.evaluate(() => {
+  // 云台俯到 -25° 俯瞰地面,再切机载视角,画面里才有可拍的地景
   window.__djiDebug.fly.sim.setGimbalPitch(-25)
+  // 切机载视角取景,后续用 photo-button / record-toggle 演示拍照与录制
   window.__djiDebug.fly.setCameraMode('fpv')
 })
 await page.waitForTimeout(1600)

@@ -26,7 +26,9 @@ const dump = (tag) =>
     const wp = cam.getWorldPosition(new THREE.Vector3()).toArray().map((n) => Number(n.toFixed(3)))
     const wq = cam.getWorldQuaternion(new THREE.Quaternion())
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(wq).toArray().map((n) => Number(n.toFixed(3)))
+    // 同时记局部位姿与父级链:机载相机多挂在机体节点下,须区分局部/世界坐标
     const lp = cam.position.toArray().map((n) => Number(n.toFixed(3)))
+    // 记录相机父级链:判断 FPV 是否挂在机体节点下(区分局部/世界朝向)
     const parents = []
     let cur = cam.parent
     while (cur) {

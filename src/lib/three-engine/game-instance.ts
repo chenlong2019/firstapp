@@ -1,3 +1,11 @@
+/**
+ * DJI 飞行沙盒的场景装配层(GameInstance)。
+ *
+ * 把渲染器(THREEViewer)、飞行仿真与模型机械(DroneFly)、缩放轨道控制器装成一体,
+ * 并驱动每帧主循环:更新 FPS → 轨道控制器 → 阴影焦点 → 录像/拍照取景 → render → 仿真推进。
+ * 对外导出 GameInstance,向上层暴露快照/遥测/FPS 等只读查询,以及 destroy 释放资源。
+ * 约定:构造即触发异步初始化(不能 await),就绪前各查询返回空或默认值。
+ */
 import * as THREE from 'three'
 import { THREEViewer } from './three-viewer'
 import type { WebGPURenderer } from 'three/webgpu'
@@ -24,6 +32,7 @@ export class GameInstance {
 
   constructor(container: HTMLElement) {
     this.container = container
+    // 构造不能 await:异步初始化 fire-and-forget,就绪与否由 ready 判定
     void this.init()
   }
 
@@ -41,14 +50,21 @@ export class GameInstance {
     this.droneFly = new DroneFly(scene, camera, renderer, controls)
     this.startLoop()
     try {
+      // 模型加载失败不阻断主循环:仍可渲染空场景并留下错误日志
       await this.droneFly.initialize()
     } catch (error) {
       console.error('Failed to load DJI Mini 4 Pro model.', error)
     }
+    // 仅开发环境挂调试句柄,生产构建会被摇掉
     if (import.meta.env.DEV) {
       ;(
         window as unknown as {
-          __djiDebug?: { game: GameInstance; fly: DroneFly | undefined; sim: unknown; THREE: typeof THREE }
+          __djiDebug?: {
+            game: GameInstance
+            fly: DroneFly | undefined
+            sim: unknown
+            THREE: typeof THREE
+          }
         }
       ).__djiDebug = {
         game: this,
@@ -75,6 +91,7 @@ export class GameInstance {
       if (this.scene && this.camera) this.renderer?.render(this.scene, this.camera)
       // 拍照拷屏:必须与 render 处于同一任务,否则拿到的是上一帧
       this.droneFly?.onAfterRender()
+      // 帧间隔上限 2 s:切回后台标签页时避免仿真一帧推进过多
       const deltaSeconds = this.previousFrameTime
         ? Math.min((timestamp - this.previousFrameTime) / 1000, 2)
         : 1 / 60
@@ -95,6 +112,7 @@ export class GameInstance {
   private updateFps(timestamp: number): void {
     this.fpsFrames += 1
     const elapsed = timestamp - this.fpsWindowStart
+    // 每 500 ms 结算一次 FPS,避免数字跳动过快
     if (elapsed < 500) return
 
     this.fps = Math.round((this.fpsFrames * 1000) / elapsed)
