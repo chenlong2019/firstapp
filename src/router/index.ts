@@ -46,6 +46,13 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'GLB 模型查看', menu: true },
   },
   {
+    // 与 /glb 的分工:查看器是"一次看一个",这里是"一次过一批"(批量体检 / 压缩 / 打包)
+    path: '/models',
+    name: 'Models',
+    component: () => import('../views/models/models-workbench.vue'),
+    meta: { title: '模型批量工作台', menu: true },
+  },
+  {
     // 整车交互演示:复用 public/models 下的 Tesla Model 3(rigged)资产
     path: '/tesla',
     name: 'Tesla',
@@ -57,6 +64,12 @@ const routes: RouteRecordRaw[] = [
     name: 'LibDemo',
     component: () => import('../views/lib-demo/lib-demo.vue'),
     meta: { title: '库调用示例', menu: true },
+  },
+  {
+    path: '/use-lib-demo',
+    name: 'UseLibDemo',
+    component: () => import('../views/examples/use-lib-demo.vue'),
+    meta: { title: '示例页面', menu: true },
   },
   // 兜底:任意未匹配路径都回退到 GLB 查看器,避免深链或刷新落到空白页
   { path: '/:pathMatch(.*)*', redirect: '/glb' },

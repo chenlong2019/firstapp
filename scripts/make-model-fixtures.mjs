@@ -191,6 +191,150 @@ const scaleStl = (source, factor) =>
 
 writeFileSync(join(OUT, 'big-tetra.stl'), scaleStl(STL, 170))
 
+// ————————————————————————— GLB 夹具(校验"二进制体检"口径) —————————————————————————
+// 手搓一个每个数字都可预期的 glb:1 个 mesh 里塞 3 个 primitive ——
+//   A 立方体,带法线 / UV / 贴图材质            → 12 面、8 顶点
+//   B 四边形,无法线、无 UV、无材质             →  2 面、4 顶点
+//   C 不带索引、无法线、无 UV,却引用 A 的贴图材质 →  1 面、3 顶点
+// 期望指标(场景口径与字节口径必须给出一模一样的数字,见 verify-model-batch):
+//   triangles 15 · vertices 15 · materials 3 · textures 1 · maxTextureSize 16px
+//   missingNormal 2 · missingUvWithTexture 1 · unindexedMeshes 1 · size [2,2,2]
+// ⚠️ materials 是 3 而不是 2:glTF 里只定义了 2 个材质,但 three 的 GLTFLoader 会因
+//    「缺切线 / 顶点色 / 缺法线」克隆材质(见 glb-inspect 的 materialFlags),这里三条
+//    primitive 各命中一个不同的克隆键,于是场景里有 3 个 THREE 材质 —— 字节口径必须跟着数 3。
+// 另出一份 tiny-quantized.glb:量化后 accessor.min/max 是**未反量化**的整数,
+// 包围盒仍必须是 [2,2,2] —— 专门盯 KHR_mesh_quantization 的反量化。
+const CUBE_POSITIONS = new Float32Array([
+  -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1,
+  -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
+])
+const CUBE_NORMALS = new Float32Array([
+  0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
+  0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+])
+const CUBE_UVS = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1])
+const CUBE_INDICES = new Uint16Array([
+  0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1,
+  3, 2, 6, 3, 6, 7, 1, 5, 6, 1, 6, 2, 0, 3, 7, 0, 7, 4,
+])
+const QUAD_POSITIONS = new Float32Array([-0.2, -0.2, 0, 0.2, -0.2, 0, 0.2, 0.2, 0, -0.2, 0.2, 0])
+const QUAD_INDICES = new Uint16Array([0, 1, 2, 0, 2, 3])
+const LOOSE_POSITIONS = new Float32Array([-0.1, 0.5, 0, 0.1, 0.5, 0, 0, 0.7, 0])
+
+// 扩展名是 .glb、内容却不是 GLB —— 批量处理要能识别并标记"跳过",而不是抛个看不懂的解析错误
+writeFileSync(join(OUT, 'fake.glb'), 'this is definitely not a glb file')
+
+// ————————————————————————— 高压夹具(验证"压缩真的能瘦身") —————————————————————————
+// tiny.glb 只有 2 KB —— 对这么小的文件,meshopt 的容器头开销比它省下的几何还多,压缩后
+// 反而会**变大**(压缩器的正常表现,不是缺陷)。要验证"压缩确实能瘦身",几何量得够大,
+// 所以另出一份高分辨率 UV 球:160×80 段 ≈ 2.56 万面 / 约 0.7 MB,压缩后有明确收益。
+const DENSE_SEGMENTS = 160
+const DENSE_RINGS = 80
+
+function buildDenseSphere() {
+  const positions = []
+  const normals = []
+  const uvs = []
+  const indices = []
+  for (let ring = 0; ring <= DENSE_RINGS; ring += 1) {
+    const v = ring / DENSE_RINGS
+    const phi = v * Math.PI
+    for (let segment = 0; segment <= DENSE_SEGMENTS; segment += 1) {
+      const u = segment / DENSE_SEGMENTS
+      const theta = u * Math.PI * 2
+      const x = Math.sin(phi) * Math.cos(theta)
+      const y = Math.cos(phi)
+      const z = Math.sin(phi) * Math.sin(theta)
+      positions.push(x, y, z)
+      normals.push(x, y, z)
+      uvs.push(u, 1 - v)
+    }
+  }
+  const stride = DENSE_SEGMENTS + 1
+  for (let ring = 0; ring < DENSE_RINGS; ring += 1) {
+    for (let segment = 0; segment < DENSE_SEGMENTS; segment += 1) {
+      const a = ring * stride + segment
+      const b = a + stride
+      indices.push(a, b, a + 1, b, b + 1, a + 1)
+    }
+  }
+  return {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    uvs: new Float32Array(uvs),
+    indices: new Uint32Array(indices),
+  }
+}
+
+try {
+  const { Document, NodeIO } = await import('@gltf-transform/core')
+  const { ALL_EXTENSIONS } = await import('@gltf-transform/extensions')
+  const { quantize } = await import('@gltf-transform/functions')
+
+  const buildTiny = () => {
+    const doc = new Document()
+    const buffer = doc.createBuffer()
+    const makeAccessor = (name, type, array) =>
+      doc.createAccessor(name).setType(type).setArray(array).setBuffer(buffer)
+
+    const texture = doc.createTexture('checker').setImage(makeCheckerPng(16)).setMimeType('image/png')
+    const textured = doc.createMaterial('Textured').setBaseColorTexture(texture)
+    const plain = doc.createMaterial('Plain')
+
+    const cube = doc
+      .createPrimitive()
+      .setAttribute('POSITION', makeAccessor('posA', 'VEC3', CUBE_POSITIONS))
+      .setAttribute('NORMAL', makeAccessor('nrmA', 'VEC3', CUBE_NORMALS))
+      .setAttribute('TEXCOORD_0', makeAccessor('uvA', 'VEC2', CUBE_UVS))
+      .setIndices(makeAccessor('idxA', 'SCALAR', CUBE_INDICES))
+      .setMaterial(textured)
+
+    const quad = doc
+      .createPrimitive()
+      .setAttribute('POSITION', makeAccessor('posB', 'VEC3', QUAD_POSITIONS))
+      .setIndices(makeAccessor('idxB', 'SCALAR', QUAD_INDICES))
+      .setMaterial(plain)
+
+    const loose = doc
+      .createPrimitive()
+      .setAttribute('POSITION', makeAccessor('posC', 'VEC3', LOOSE_POSITIONS))
+      .setMaterial(textured)
+
+    const mesh = doc.createMesh('Tiny').addPrimitive(cube).addPrimitive(quad).addPrimitive(loose)
+    const root = doc.createNode('TinyRoot').setMesh(mesh)
+    root.addChild(doc.createNode('TinyChild'))
+    doc.createScene('Scene').addChild(root)
+    return doc
+  }
+
+  const io = new NodeIO().registerExtensions(ALL_EXTENSIONS)
+  writeFileSync(join(OUT, 'tiny.glb'), Buffer.from(await io.writeBinary(buildTiny())))
+
+  const quantified = buildTiny()
+  await quantified.transform(quantize())
+  writeFileSync(join(OUT, 'tiny-quantized.glb'), Buffer.from(await io.writeBinary(quantified)))
+
+  // 高压夹具:走完全一样的写入路径,只是几何量足够大 —— 压缩前后才有可测的差异
+  const sphere = buildDenseSphere()
+  const denseDoc = new Document()
+  const denseBuffer = denseDoc.createBuffer()
+  const denseAccessor = (name, type, array) =>
+    denseDoc.createAccessor(name).setType(type).setArray(array).setBuffer(denseBuffer)
+  const denseMesh = denseDoc.createMesh('Dense').addPrimitive(
+    denseDoc
+      .createPrimitive()
+      .setAttribute('POSITION', denseAccessor('dpos', 'VEC3', sphere.positions))
+      .setAttribute('NORMAL', denseAccessor('dnrm', 'VEC3', sphere.normals))
+      .setAttribute('TEXCOORD_0', denseAccessor('duv', 'VEC2', sphere.uvs))
+      .setIndices(denseAccessor('didx', 'SCALAR', sphere.indices)),
+  )
+  denseDoc.createScene('Scene').addChild(denseDoc.createNode('DenseRoot').setMesh(denseMesh))
+  writeFileSync(join(OUT, 'dense.glb'), Buffer.from(await io.writeBinary(denseDoc)))
+  console.log('已生成: tiny.glb / tiny-quantized.glb(二进制体检口径)/ dense.glb(可压缩性)')
+} catch (error) {
+  console.log(`GLB 夹具生成失败(跳过): ${error.message}`)
+}
+
 // ————————————————————————— 真实样本(复制,缺失则跳过并提示) —————————————————————————
 const copies = [
   [

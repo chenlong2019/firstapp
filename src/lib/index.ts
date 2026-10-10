@@ -43,7 +43,19 @@ export * from './three-engine/model-loaders'
 export * from './three-engine/glb-viewer'
 
 // ──────────────────────────────────────────────────────────────────────────
-// 5. 应用装配层：把上面几层拼成一个可渲染场景（需要 DOM 环境，按需引入）
+// 5. 模型工作流：体检评分规则 / 二进制体检 / 批量处理 / 打包
+//    `model-audit-rules` 是唯一不含 three 的一块(纯数值规则),`glb-inspect` 只依赖它,
+//    因此"不解码直读 GLB 容器"的批量体检与渲染无关,可在 Worker 里跑。
+//    ⚠️ `model-audit` 是场景口径(需要 three),与 `glb-inspect` 共用同一套规则与评分。
+// ──────────────────────────────────────────────────────────────────────────
+export * from './three-engine/model-audit-rules'
+export * from './three-engine/model-audit'
+export * from './three-engine/glb-inspect'
+export * from './three-engine/model-batch'
+export * from './three-engine/zip-store'
+
+// ──────────────────────────────────────────────────────────────────────────
+// 6. 应用装配层：把上面几层拼成一个可渲染场景（需要 DOM 环境，按需引入）
 // ──────────────────────────────────────────────────────────────────────────
 export * from './three-engine/game-ui'
 export * from './three-engine/game-instance'
